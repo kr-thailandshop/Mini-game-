@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เกมดีดลูกแก้ว 3D - ลานดิน (Original Single Player)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; user-select: none; touch-action: none; font-family: 'Kanit', sans-serif; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #1a0f0a; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        .glass-panel {
+            background: rgba(45, 25, 15, 0.6);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(212, 175, 55, 0.3);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+        .wood-button {
+            background: linear-gradient(180deg, rgba(139,69,19,0.8) 0%, rgba(92,46,11,0.8) 100%);
+            backdrop-filter: blur(4px);
+            border: 1.5px solid rgba(212,175,55,0.6);
+            box-shadow: 0 3px 6px rgba(0,0,0,0.5);
+            transition: all 0.15s ease;
+        }
+        .wood-button:active { transform: translateY(2px); box-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+        
+        /* แจ้งเตือนกลางจอ */
+        @keyframes toastFade {
+            0% { opacity: 0; transform: translate(-50%, -20px) scale(0.9); }
+            15% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            85% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, -20px) scale(0.9); }
+        }
+        .toast-banner { animation: toastFade 2s ease forwards; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <!-- UI LAYER (โปร่งใส โล่งตา ไม่เกะกะ) -->
+    <div class="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between p-3 sm:p-4">
+        
+        <!-- TOP BAR -->
+        <div class="flex justify-between items-start pointer-events-auto">
+            <div class="glass-panel px-4 py-2 rounded-2xl flex items-center gap-3">
+                <div class="text-2xl drop-shadow-md">🔮</div>
+                <div>
+                    <div class="text-amber-200 text-sm font-bold leading-none">ดีดลูกแก้ว 3D</div>
+                    <div class="text-amber-400 text-xs mt-1">คะแนน: <span id="ui-score" class="font-bold text-sm">0</span></div>
+                </div>
+            </div>
+            <button id="btn-audio" class="glass-panel w-10 h-10 rounded-full text-amber-100 flex items-center justify-center text-lg">🔊</button>
+        </div>
+
+        <!-- TOAST CONTAINER -->
+        <div id="toast-container" class="absolute top-24 left-1/2 -translate-x-1/2 pointer-events-none"></div>
+
+        <!-- RIGHT SIDE FLOATING ZOOM (โปร่งใส) -->
+        <div class="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-3 opacity-60 hover:opacity-100 transition-opacity pointer-events-auto">
+            <button id="btn-zoom-in" class="wood-button w-11 h-11 rounded-full text-amber-100 font-bold text-lg">🔍+</button>
+            <button id="btn-zoom-out" class="wood-button w-11 h-11 rounded-full text-amber-100 font-bold text-lg">🔍-</button>
+            <button id="btn-zoom-reset" class="wood-button w-11 h-11 rounded-full text-amber-200 text-[10px] font-bold leading-tight flex flex-col items-center justify-center">🎯<br>มุม</button>
+        </div>
+
+        <!-- BOTTOM ACTION BAR -->
+        <div class="flex justify-between items-end pointer-events-auto pb-1">
+            <button id="btn-restart" class="glass-panel px-4 py-2 rounded-xl text-amber-100 text-sm font-bold flex gap-2 items-center">
+                🔄 เริ่มใหม่
+            </button>
+            <button id="btn-cam" class="glass-panel px-4 py-2 rounded-xl text-amber-100 text-sm font-bold flex gap-2 items-center">
+                🎥 ตามลูกแก้ว
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const MathUtils = THREE.MathUtils;
+        const CONFIG = {
+            holePos: new THREE.Vector3(0, 0, -3.0),
+            holeRadius: 0.35,
+            holeDepth: 0.5,
+            marbleRadius: 0.14,
+            startPos: new THREE.Vector3(0, 0.14, 1.25),
+            maxPower: 32.0,
+            maxDragDist: 1.0,
+            staticFriction: 0.15,
+            damping: 0.98,
+            gravity: 9.81,
+            mapW: 50,
+            mapD: 50
+        };
+
+        // สถานะผู้เล่นคนเดียว
+        let player = { pos: CONFIG.startPos.clone(), vel: new THREE.Vector3(), score: 0, mesh: null };
+        let isAiming = false;
+        let isMoving = false;
+        let cameraMode = 'follow'; // 'follow' หรือ 'free'
+        let audioMuted = false;
+
+        let scene, camera, renderer, controls;
+        let aimingArrowGroup;
+        let raycaster, mouse, dragStartPoint = null;
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playSound(type) {
+            if (audioMuted || !audioCtx) return;
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            if (type === 'flick') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(180, now);
+                osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+                gain.gain.setValueAtTime(0.5, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
+            } else if (type === 'hole') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.setValueAtTime(600, now + 0.1);
+                gain.gain.setValueAtTime(0.4, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
+            }
+            osc.connect(gain); gain.connect(audioCtx.destination);
+        }
+
+        function showToast(text) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'glass-panel px-5 py-2 rounded-full text-amber-200 text-sm font-bold shadow-2xl toast-banner';
+            toast.innerHTML = text;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        // ความสูงพื้นสนาม (มีเนินคลื่น + ปรับเรียบรอบหลุม)
+        function getTerrainHeight(x, z) {
+            const dx = x - CONFIG.holePos.x;
+            const dz = z - CONFIG.holePos.z;
+            const dist = Math.sqrt(dx*dx + dz*dz);
+            
+            // สร้างเนินคลื่นธรรมชาติ
+            let h = Math.sin(x * 0.4) * 0.2 + Math.cos(z * 0.4) * 0.2;
+            
+            // ทำให้พื้นรอบหลุมเรียบเนียน ไม่โดนทรายกลบ
+            if (dist < 1.5) {
+                const t = dist / 1.5;
+                h *= (t * t * (3 - 2 * t)); // Smoothstep
+            }
+            return h;
+        }
+
+        function getTerrainGradient(x, z) {
+            const eps = 0.05;
+            return {
+                gx: (getTerrainHeight(x + eps, z) - getTerrainHeight(x - eps, z)) / (2 * eps),
+                gz: (getTerrainHeight(x, z + eps) - getTerrainHeight(x, z - eps)) / (2 * eps)
+            };
+        }
+
+        function initScene() {
+            const container = document.getElementById('canvas-container');
+            container.innerHTML = '';
+
+            // Scene & Camera
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xd98b54);
+            scene.fog = new THREE.FogExp2(0xd98b54, 0.02);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.maxPolarAngle = Math.PI / 2 - 0.05;
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffeedd, 0.8));
+            const sun = new THREE.DirectionalLight(0xfff5e6, 1.0);
+            sun.position.set(10, 20, 10);
+            sun.castShadow = true;
+            sun.shadow.camera.left = -20; sun.shadow.camera.right = 20;
+            sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -20;
+            scene.add(sun);
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            buildEnvironment();
+            setupPlayer();
+            setupInteractions();
+            
+            updateCameraFocus(); // เริ่มต้นตั้งกล้องให้มองเห็นลูกและหลุม
+            animate();
+        }
+
+        function buildEnvironment() {
+            // พื้นดิน 50x50 เมตร
+            const geo = new THREE.PlaneGeometry(CONFIG.mapW, CONFIG.mapD, 120, 120);
+            geo.rotateX(-Math.PI / 2);
+            const pos = geo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                pos.setY(i, getTerrainHeight(pos.getX(i), pos.getZ(i)));
+            }
+            geo.computeVertexNormals();
+
+            // Texture ดินแบบง่าย
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#b86d29'; ctx.fillRect(0,0,256,256);
+            for(let i=0; i<1000; i++){
+                ctx.fillStyle = '#8a4b18';
+                ctx.globalAlpha = Math.random()*0.3;
+                ctx.beginPath();
+                ctx.arc(Math.random()*256, Math.random()*256, Math.random()*2, 0, Math.PI*2);
+                ctx.fill();
+            }
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(15, 15);
+
+            const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 });
+            const terrain = new THREE.Mesh(geo, mat);
+            terrain.receiveShadow = true;
+            scene.add(terrain);
+
+            // หลุม
+            const holeGroup = new THREE.Group();
+            const cyl = new THREE.Mesh(
+                new THREE.CylinderGeometry(CONFIG.holeRadius, CONFIG.holeRadius*0.9, CONFIG.holeDepth, 32),
+                new THREE.MeshBasicMaterial({ color: 0x0a0502 })
+            );
+            cyl.position.y = -CONFIG.holeDepth/2;
+            const rim = new THREE.Mesh(
+                new THREE.TorusGeometry(CONFIG.holeRadius+0.02, 0.03, 16, 32).rotateX(Math.PI/2),
+                new THREE.MeshStandardMaterial({ color: 0x4a2810 })
+            );
+            holeGroup.add(cyl, rim);
+            holeGroup.position.set(CONFIG.holePos.x, getTerrainHeight(CONFIG.holePos.x, CONFIG.holePos.z), CONFIG.holePos.z);
+            scene.add(holeGroup);
+
+            // ลูกศรเล็ง
+            aimingArrowGroup = new THREE.Group();
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1).rotateX(Math.PI/2).translate(0,0,-0.5), new THREE.MeshBasicMaterial({color: 0x00ffcc}));
+            const head = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3).rotateX(-Math.PI/2).translate(0,0,-1.1), new THREE.MeshBasicMaterial({color: 0x00ffcc}));
+            aimingArrowGroup.add(shaft, head);
+            aimingArrowGroup.visible = false;
+            scene.add(aimingArrowGroup);
+
+            // วัตถุประกอบฉาก (ผลักออกไปไกลๆ ไม่บังกล้อง)
+            const boxGeo = new THREE.BoxGeometry(4, 3, 3);
+            const boxMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21 });
+            const hut1 = new THREE.Mesh(boxGeo, boxMat);
+            hut1.position.set(-15, 1.5, -18);
+            const hut2 = new THREE.Mesh(boxGeo, boxMat);
+            hut2.position.set(15, 1.5, -18);
+            scene.add(hut1, hut2);
+        }
+
+        function setupPlayer() {
+            if (player.mesh) scene.remove(player.mesh);
+            
+            const group = new THREE.Group();
+            const glass = new THREE.Mesh(
+                new THREE.SphereGeometry(CONFIG.marbleRadius, 32, 32),
+                new THREE.MeshPhysicalMaterial({ color: 0xe74c3c, transmission: 0.6, transparent: true, roughness: 0.1 })
+            );
+            glass.castShadow = true;
+            const core = new THREE.Mesh(
+                new THREE.TorusKnotGeometry(CONFIG.marbleRadius*0.4, 0.02, 32, 8),
+                new THREE.MeshBasicMaterial({color: 0xffffff})
+            );
+            group.add(glass, core);
+            
+            player.mesh = group;
+            player.pos.copy(CONFIG.startPos);
+            player.vel.set(0,0,0);
+            player.mesh.position.copy(player.pos);
+            scene.add(player.mesh);
+            
+            document.getElementById('ui-score').innerText = player.score;
+        }
+
+        // จัดกล้องให้อยู่หลังลูกแก้ว และหันหน้าตรงไปทางหลุม
+        function updateCameraFocus() {
+            if (cameraMode !== 'follow') return;
+            
+            const dirToHole = new THREE.Vector3().subVectors(CONFIG.holePos, player.pos).normalize();
+            
+            // หากลูกแก้วทับหลุมพอดี ป้องกัน error
+            if(dirToHole.lengthSq() === 0) dirToHole.set(0,0,-1);
+
+            const camDist = 3.5;
+            const camHeight = 1.5;
+            const targetCamPos = player.pos.clone().sub(dirToHole.multiplyScalar(camDist));
+            targetCamPos.y = player.pos.y + camHeight;
+
+            controls.target.lerp(player.pos, 0.15);
+            camera.position.lerp(targetCamPos, 0.15);
+        }
+
+        function setupInteractions() {
+            const container = document.getElementById('canvas-container');
+
+            function getIntersection(e) {
+                const cx = e.touches ? e.touches[0].clientX : e.clientX;
+                const cy = e.touches ? e.touches[0].clientY : e.clientY;
+                mouse.x = (cx / window.innerWidth) * 2 - 1;
+                mouse.y = -(cy / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                const plane = new THREE.Plane(new THREE.Vector3(0,1,0), -player.pos.y);
+                const target = new THREE.Vector3();
+                raycaster.ray.intersectPlane(plane, target);
+                return target;
+            }
+
+            function down(e) {
+                if (isMoving) return;
+                initAudio();
+                const pt = getIntersection(e);
+                if (pt && pt.distanceTo(player.pos) < 2.0) {
+                    isAiming = true;
+                    dragStartPoint = pt;
+                    controls.enabled = false;
+                }
+            }
+
+            function move(e) {
+                if (!isAiming || isMoving) return;
+                const pt = getIntersection(e);
+                if (!pt) return;
+
+                const pull = new THREE.Vector3().subVectors(dragStartPoint, pt);
+                const dist = Math.min(pull.length(), CONFIG.maxDragDist);
+                const ratio = dist / CONFIG.maxDragDist;
+
+                aimingArrowGroup.position.copy(player.pos);
+                aimingArrowGroup.lookAt(player.pos.clone().add(pull.normalize()));
+                aimingArrowGroup.scale.set(1, 1, Math.max(0.2, ratio * 2.5));
+                aimingArrowGroup.visible = true;
+                
+                const col = ratio > 0.7 ? 0xff3300 : (ratio > 0.4 ? 0xffcc00 : 0x00ffcc);
+                aimingArrowGroup.children.forEach(c => c.material.color.setHex(col));
+            }
+
+            function up(e) {
+                if (!isAiming) return;
+                isAiming = false;
+                aimingArrowGroup.visible = false;
+                controls.enabled = true;
+
+                const pt = getIntersection(e);
+                if (!pt) return;
+
+                const pull = new THREE.Vector3().subVectors(dragStartPoint, pt);
+                const dist = pull.length();
+                if (dist > 0.1) {
+                    const ratio = Math.min(dist, CONFIG.maxDragDist) / CONFIG.maxDragDist;
+                    player.vel.copy(pull.normalize().multiplyScalar(ratio * CONFIG.maxPower));
+                    isMoving = true;
+                    playSound('flick');
+                }
+            }
+
+            container.addEventListener('mousedown', down);
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+            container.addEventListener('touchstart', down, {passive: false});
+            window.addEventListener('touchmove', move, {passive: false});
+            window.addEventListener('touchend', up);
+        }
+
+        let lastTime = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+            const now = performance.now();
+            const dt = Math.min((now - lastTime) / 1000, 0.033);
+            lastTime = now;
+
+            if (isMoving) {
+                const grad = getTerrainGradient(player.pos.x, player.pos.z);
+                player.vel.x -= grad.gx * CONFIG.gravity * dt;
+                player.vel.z -= grad.gz * CONFIG.gravity * dt;
+                player.vel.multiplyScalar(CONFIG.damping);
+
+                if (player.vel.length() < CONFIG.staticFriction) {
+                    player.vel.set(0,0,0);
+                    isMoving = false;
+                }
+
+                player.pos.x += player.vel.x * dt;
+                player.pos.z += player.vel.z * dt;
+                
+                // กันตกขอบ
+                const b = CONFIG.mapW/2 - 1;
+                if(Math.abs(player.pos.x) > b) { player.pos.x = Math.sign(player.pos.x)*b; player.vel.x *= -0.5; }
+                if(Math.abs(player.pos.z) > b) { player.pos.z = Math.sign(player.pos.z)*b; player.vel.z *= -0.5; }
+
+                player.pos.y = getTerrainHeight(player.pos.x, player.pos.z) + CONFIG.marbleRadius;
+                player.mesh.position.copy(player.pos);
+
+                // เช็คลงหลุม
+                if (player.pos.distanceTo(CONFIG.holePos) < CONFIG.holeRadius) {
+                    player.vel.set(0,0,0);
+                    isMoving = false;
+                    player.score += 150;
+                    document.getElementById('ui-score').innerText = player.score;
+                    playSound('hole');
+                    showToast('🎯 ลงหลุมสำเร็จ! +150 คะแนน');
+                    
+                    // รีเซ็ตกลับจุดเริ่ม
+                    setTimeout(() => {
+                        player.pos.copy(CONFIG.startPos);
+                        player.mesh.position.copy(player.pos);
+                    }, 500);
+                }
+            }
+
+            if (!isAiming && !isMoving) updateCameraFocus();
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // ปุ่ม UI ต่างๆ
+        document.getElementById('btn-zoom-in').onclick = () => camera.position.sub(controls.target).multiplyScalar(0.8).add(controls.target);
+        document.getElementById('btn-zoom-out').onclick = () => camera.position.sub(controls.target).multiplyScalar(1.2).add(controls.target);
+        document.getElementById('btn-zoom-reset').onclick = () => updateCameraFocus();
+        
+        document.getElementById('btn-restart').onclick = () => { player.score = 0; setupPlayer(); updateCameraFocus(); };
+        
+        document.getElementById('btn-cam').onclick = () => {
+            cameraMode = cameraMode === 'follow' ? 'free' : 'follow';
+            document.getElementById('btn-cam').innerHTML = cameraMode === 'follow' ? '🎥 ตามลูกแก้ว' : '🎥 หมุนอิสระ';
+        };
+        
+        document.getElementById('btn-audio').onclick = () => {
+            audioMuted = !audioMuted;
+            document.getElementById('btn-audio').innerHTML = audioMuted ? '🔇' : '🔊';
+        };
+
+        window.onresize = () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); };
+        window.onload = initScene;
+    </script>
+</body>
+</html>
