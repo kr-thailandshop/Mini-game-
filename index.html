@@ -1596,4 +1596,671 @@
                         this.players.forEach(p => this.refreshTag(p));
                         this.log.push('order ' + this.order.join(','));
                         this.after(0.8, () => this.toast('📋 ลำดับเล่น: ' + this.order.map(i => this.players[i].name).join(' → ')));
-                        this.after(2.4, () => this.beginTurn(t
+                        this.after(2.4, () => this.beginTurn(this.order[0]));
+                    }
+                    this.updateHUD();
+                    return;
+                }
+
+                let extra = false;
+                const msgs = [];
+                if (sm && sm.holed && !s.blessedAtStart) {
+                    this.bless(P); extra = true;
+                    msgs.push(`👑 ${P.name} ชุบตัวสำเร็จ! (+${CFG.SCORE_BLESS})`);
+                    this.log.push(`bless ${P.idx}`);
+                } else if (sm && sm.holed) {
+                    this.placeAtRim(sm);
+                }
+                s.eaten.forEach(v => {
+                    const V = this.players[v.player];
+                    P.score += CFG.SCORE_EAT;
+                    V.lives--; V.blessed = false;
+                    this.killMarble(v);
+                    if (V.lives > 0) this.spawnAtLine(V.idx);
+                    else { V.out = true; if (V.tag) V.tag.visible = false; }
+                    msgs.push(`💥 กิน ${V.name}! (+${CFG.SCORE_EAT})`);
+                    this.log.push(`eat ${P.idx}->${V.idx} lives=${V.lives}`);
+                    extra = true;
+                });
+                knockedIn();
+                this.updateHUD();
+
+                const alive = this.players.filter(p => !p.out);
+                if (this.players[0].out || alive.length <= 1) {
+                    this.state = 'over';
+                    if (msgs.length) this.toast(msgs.join(' '));
+                    this.log.push('over');
+                    this.after(1.4, () => this.showGameOver());
+                    return;
+                }
+                if (extra) {
+                    this.toast(msgs.join(' ') + ' ได้ดีดต่อ');
+                    this.after(1.3, () => this.beginTurn(P.idx));
+                } else {
+                    const nx = this.nextPlayerAfter(P.idx);
+                    if (nx !== P.idx) this.toast(`↪️ ดีดพลาด เปลี่ยนตาให้ ${this.players[nx].name}`);
+                    this.after(1.1, () => this.beginTurn(nx));
+                }
+            }
+
+            // ---------------------------------------------------------------
+            // PHYSICS (ใช้ร่วมกันระหว่างเกมจริงและการจำลองของบอท)
+            // ---------------------------------------------------------------
+            integrate(m, dt, canHole) {
+                const H = this.hole;
+                if (Math.hypot(m.vx, m.vz) < CFG.STOP_SPEED && !m.moving) {
+                    m.vx = 0; m.vz = 0;
+                } else {
+                    m.moving = true;
+                    if (this.stage !== 1) {
+                        const e = 0.1;
+                        const dhdx = (this.fastH(m.x + e, m.z) - this.fastH(m.x - e, m.z)) / (2 * e);
+                        const dhdz = (this.fastH(m.x, m.z + e) - this.fastH(m.x, m.z - e)) / (2 * e);
+                        m.vx -= dhdx * CFG.GRAVITY * dt; m.vz -= dhdz * CFG.GRAVITY * dt;
+                    }
+                    // แบ่งก้าวย่อยเมื่อเร็ว กันลูกทะลุกิ่งไม้/ก้อนหินเล็ก
+                    const n = Math.min(4, Math.max(1, Math.ceil(Math.hypot(m.vx, m.vz) * dt / 0.14)));
+                    for (let k = 0; k < n; k++) {
+                        m.x += m.vx * dt / n; m.z += m.vz * dt / n;
+                        if (this.colliders.length) this.collideObstacles(m);
+                    }
+                    let fr = CFG.FRICTION;
+                    for (let k = 0; k < this.zones.length; k++) {
+                        const zn = this.zones[k];
+                        if (this.inZone(zn, m.x, m.z)) fr = zn.f;
+                    }
+                    const f = Math.pow(fr, dt * 60);
+                    m.vx *= f; m.vz *= f;
+                    const nearHole = canHole && Math.hypot(m.x - H.x, m.z - H.z) < H.r;
+                    if (Math.hypot(m.vx, m.vz) < CFG.STOP_SPEED && !nearHole) { m.vx = 0; m.vz = 0; m.moving = false; }
+                }
+                if (Math.abs(m.x) > CFG.FIELD) { m.x = Math.sign(m.x) * CFG.FIELD; m.vx *= -0.6; }
+                if (Math.abs(m.z) > CFG.FIELD) { m.z = Math.sign(m.z) * CFG.FIELD; m.vz *= -0.6; }
+
+                const d = Math.hypot(m.x - H.x, m.z - H.z);
+                if (canHole && d < H.r && Math.hypot(m.vx, m.vz) < CFG.HOLE_CAPTURE_SPEED) {
+                    if (d > 1e-4) {
+                        const pull = 4.0 + (1 - d / H.r) * 6.5;
+                        m.vx += (H.x - m.x) / d * pull * dt; m.vz += (H.z - m.z) / d * pull * dt;
+                    }
+                    m.moving = true;
+                    m.y = H.base + m.r - Math.cos((d / H.r) * (Math.PI / 2)) * H.depth;
+                    if (d < H.r * 0.55 && m.y < H.base + m.r - 0.15) return true;
+                } else {
+                    m.y = this.fastH(m.x, m.z) + m.r;
+                }
+                return false;
+            }
+
+            physicsStep(dt) {
+                const act = this.activeMarbles();
+                for (const m of act) {
+                    const canHole = !m.eaten && !this.players[m.player].blessed;
+                    if (this.integrate(m, dt, canHole)) this.onHoled(m);
+                }
+                const live = act.filter(m => !m.holed);
+                for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+                    const a = live[i], b = live[j];
+                    const dx = a.x - b.x, dz = a.z - b.z, dist = Math.hypot(dx, dz), min = a.r + b.r;
+                    if (dist < min && dist > 1e-4) {
+                        const nx = dx / dist, nz = dz / dist, ov = (min - dist) * 0.5;
+                        a.x += nx * ov; a.z += nz * ov; b.x -= nx * ov; b.z -= nz * ov;
+                        const vn = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
+                        if (vn < 0) {
+                            const j2 = -(1 + 0.88) * vn / 2;
+                            a.vx += j2 * nx; a.vz += j2 * nz; b.vx -= j2 * nx; b.vz -= j2 * nz;
+                            a.moving = b.moving = true;
+                            if (this.time - this.lastHitSound > 0.05) { audio.playCollision(Math.abs(vn) / 5); this.lastHitSound = this.time; }
+                            this.onContact(a, b);
+                        }
+                    }
+                }
+                for (const m of this.marbles) {
+                    if (m.removed) continue;
+                    m.mesh.position.set(m.x, m.y, m.z);
+                    m.mesh.rotation.x += m.vz * dt * 3.2;
+                    m.mesh.rotation.z -= m.vx * dt * 3.2;
+                }
+            }
+
+            onHoled(m) {
+                m.holed = true; m.vx = m.vz = 0; m.moving = false;
+                m.x = this.hole.x; m.z = this.hole.z; m.y = this.hole.base - 0.22;
+                m.mesh.position.set(m.x, m.y, m.z);
+                audio.playHoleDrop();
+                // ตกหลุมนอกจังหวะดีด (เช่น ไหลเองหลังจบตา) = ไม่นับชุบตัว วางกลับที่ปากหลุม
+                if (this.state !== 'moving' && this.state !== 'resolving') this.placeAtRim(m);
+            }
+
+            // ดีดกิน: ลูกของผู้ดีด (ที่ชุบตัวแล้วตอนเริ่มดีด) ไปโดนลูกคู่แข่งโดยตรง
+            onContact(a, b) {
+                const s = this.shot;
+                if (!s || this.state !== 'moving' || !s.blessedAtStart) return;
+                const mine = this.players[s.shooter].marble;
+                let victim = null;
+                if (a === mine && b.player !== s.shooter) victim = b;
+                else if (b === mine && a.player !== s.shooter) victim = a;
+                if (!victim || victim.eaten) return;
+                if (victim.shield) { this.toast(`🛡️ ลูกใหม่ของ ${this.players[victim.player].name} ยังกินไม่ได้`); return; }
+                victim.eaten = true;
+                s.eaten.push(victim);
+                audio.playEat();
+                this.toast(`💥 ดีดกิน ${this.players[victim.player].name}!`);
+            }
+
+            // ---------------------------------------------------------------
+            // BOT AI: จำลองวิถีด้วยฟิสิกส์ตัวเดียวกับเกม แล้วเลือกช็อตที่ดีที่สุด + ความคลาดเคลื่อนตามระดับ
+            // ---------------------------------------------------------------
+            simulate(me, vx, vz, canHole, obstacles, tgt) {
+                const s = this._sim || (this._sim = { r: CFG.MARBLE_R, sim: true });
+                s.x = me.x; s.y = me.y; s.z = me.z; s.vx = vx; s.vz = vz; s.moving = true;
+                let minD = Infinity, t = 0;
+                for (; t < 720; t++) {
+                    if (this.integrate(s, CFG.STEP, canHole)) return { holed: true, hit: null, x: s.x, z: s.z, t, minD };
+                    for (let k = 0; k < obstacles.length; k++) {
+                        const o = obstacles[k], d = Math.hypot(s.x - o.x, s.z - o.z);
+                        if (d < s.r + o.r) return { holed: false, hit: o, x: s.x, z: s.z, t, minD: 0 };
+                        if (o === tgt && d - 2 * s.r < minD) minD = d - 2 * s.r;
+                    }
+                    if (!s.moving) break;
+                }
+                return { holed: false, hit: null, x: s.x, z: s.z, t, minD };
+            }
+
+            planBotShot(pi) {
+                const t0 = performance.now();
+                const P = this.players[pi], me = P.marble, H = this.hole, lvl = BOT_LEVELS[this.botLevel];
+                const DEG = Math.PI / 180;
+                const blessed = this.phase === 'play' && P.blessed;
+                const obstacles = this.activeMarbles().filter(m => m !== me);
+                const enemies = obstacles.filter(m => m.player !== pi && !m.eaten && !m.shield);
+                const eatMode = blessed && enemies.length > 0;
+                const targets = eatMode ? enemies : [null];
+                let sims = 0;
+
+                const evalShot = (a, p, tgt) => {
+                    sims++;
+                    const r = this.simulate(me, Math.cos(a) * p, Math.sin(a) * p, !blessed, obstacles, tgt);
+                    if (eatMode) {
+                        if (r.hit && r.hit.player !== pi) return { ok: true, sc: 1000 };
+                        return { ok: false, sc: r.hit ? -8 : -r.minD * 3 };
+                    }
+                    const dh = Math.hypot(r.x - H.x, r.z - H.z);
+                    if (r.holed) return { ok: true, sc: 1000 };
+                    return { ok: false, sc: r.hit ? -dh - 1.5 : -dh };
+                };
+
+                // 1) ค้นหยาบ: มุม ±20° ทีละ 4° กับแรงหลายระดับ
+                const coarse = [];
+                for (const tgt of targets) {
+                    const tx = tgt ? tgt.x : H.x, tz = tgt ? tgt.z : H.z;
+                    const a0 = Math.atan2(tz - me.z, tx - me.x), dist = Math.hypot(tx - me.x, tz - me.z);
+                    const pMax = Math.min(CFG.MAX_POWER, dist * 1.9 + 5);
+                    for (let da = -20; da <= 20; da += 4)
+                        for (let p = 1.5; p <= pMax + 1e-6; p += 0.8) {
+                            const r = evalShot(a0 + da * DEG, p, tgt);
+                            coarse.push({ a: a0 + da * DEG, p, tgt, a0, sc: r.sc - (r.ok ? Math.abs(da) * 0.5 : 0) });
+                        }
+                }
+                coarse.sort((x, y) => y.sc - x.sc);
+                const seeds = [];
+                for (const c of coarse) {
+                    if (seeds.length >= 3) break;
+                    if (seeds.every(q => Math.abs(q.a - c.a) > 3 * DEG || Math.abs(q.p - c.p) > 1.6)) seeds.push(c);
+                }
+
+                // 2) ค้นละเอียดรอบช็อตที่ดีที่สุด แล้วเลือกช็อตที่ "พลาดนิดหน่อยก็ยังได้" (เพื่อนบ้านสำเร็จเยอะสุด)
+                let pick = null, fallback = coarse[0];
+                for (const sd of seeds) {
+                    const A = 4, PN = 4, dA = 0.75 * DEG, dP = 0.3, grid = [];
+                    for (let i = -A; i <= A; i++) {
+                        const row = [];
+                        for (let j = -PN; j <= PN; j++) {
+                            const a = sd.a + i * dA, p = clamp(sd.p + j * dP, 0.8, CFG.MAX_POWER), r = evalShot(a, p, sd.tgt);
+                            row.push({ a, p, ok: r.ok });
+                            if (!r.ok && r.sc > fallback.sc) fallback = { a, p, tgt: sd.tgt, sc: r.sc };
+                        }
+                        grid.push(row);
+                    }
+                    for (let i = 0; i < grid.length; i++) for (let j = 0; j < grid[i].length; j++) {
+                        const c = grid[i][j];
+                        if (!c.ok) continue;
+                        let rob = 0;
+                        for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) { const q = grid[i + di] && grid[i + di][j + dj]; if (q && q.ok) rob++; }
+                        const score = rob * 10 - Math.abs(c.a - sd.a0) / DEG * 0.3;
+                        if (!pick || score > pick.score) pick = { a: c.a, p: c.p, tgt: sd.tgt, score };
+                    }
+                }
+                let { a, p, tgt } = pick || fallback;
+                a += gauss() * lvl.angleErr * DEG;
+                p = clamp(p * (1 + gauss() * lvl.powerErr), 0.8, CFG.MAX_POWER);
+                this.lastPlanMs = performance.now() - t0;
+                this.lastPlanSims = sims;
+                return { a, p, eatMode, tgt, found: !!pick };
+            }
+
+            // ---------------------------------------------------------------
+            // INPUT
+            // ---------------------------------------------------------------
+            canHumanAim() {
+                const P = this.players[this.current];
+                return !this.paused && this.state === 'aim' && P && !P.isBot && P.marble && this.cameraViewMode !== 2;
+            }
+
+            getGroundIntersection(clientX, clientY) {
+                const P = this.players[this.current];
+                if (!P || !P.marble) return null;
+                const rect = this.canvas.getBoundingClientRect();
+                this.mouseVec.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+                this.mouseVec.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+                this.raycaster.setFromCamera(this.mouseVec, this.camera);
+                const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -P.marble.y);
+                const hit = new THREE.Vector3();
+                return this.raycaster.ray.intersectPlane(plane, hit) ? hit : null;
+            }
+
+            setupInputs() {
+                const pt = (e) => (e.touches ? e.touches[0] : e);
+                const onDown = (e) => {
+                    if (e.touches && e.touches.length > 1) {
+                        this.cancelAiming();
+                        this.pinchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                        return;
+                    }
+                    if (!this.canHumanAim()) {
+                        if (this.cameraViewMode === 2 && this.state === 'aim') this.toast('โหมดกล้องอิสระ: กด 🎥 เพื่อกลับมาดีด');
+                        return;
+                    }
+                    const p = pt(e);
+                    this.aimStart = this.getGroundIntersection(p.clientX, p.clientY);
+                    if (!this.aimStart) return;
+                    this.isAiming = true; this.aimPower = 0; this.shootVector = null;
+                    this.setPower(0, 'ความแรง');
+                    this.showPower(true);
+                };
+                const onMove = (e) => {
+                    if (e.touches && e.touches.length > 1 && this.pinchStartDist > 0) {
+                        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                        this.zoomByFactor(this.pinchStartDist / d);   // กางนิ้ว = ซูมเข้า
+                        this.pinchStartDist = d;
+                        return;
+                    }
+                    if (!this.isAiming) return;
+                    const p = pt(e);
+                    this.updateAiming(p.clientX, p.clientY);
+                };
+                const onUp = (e) => {
+                    if (e.touches && e.touches.length > 0) return;
+                    this.pinchStartDist = 0;
+                    if (!this.isAiming) return;
+                    this.isAiming = false;
+                    const ok = this.aimPower > 0.5 && this.shootVector && this.canHumanAim();
+                    if (ok) this.fire(this.current, this.shootVector.x, this.shootVector.z, this.aimPower);
+                    this.cancelAiming();
+                };
+
+                this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.adjustZoom(e.deltaY > 0 ? 3 : -3); }, { passive: false });
+                this.canvas.addEventListener('mousedown', onDown);
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                this.canvas.addEventListener('touchstart', onDown, { passive: true });
+                window.addEventListener('touchmove', onMove, { passive: true });
+                window.addEventListener('touchend', onUp);
+                window.addEventListener('touchcancel', () => { this.pinchStartDist = 0; this.cancelAiming(); });
+            }
+
+            updateAiming(clientX, clientY) {
+                const P = this.players[this.current];
+                const hit = this.getGroundIntersection(clientX, clientY);
+                if (!hit || !this.aimStart || !P.marble) return;
+                const sx = this.aimStart.x - hit.x, sz = this.aimStart.z - hit.z;   // ทิศตรงข้ามกับการลาก
+                const dist = Math.hypot(sx, sz);
+                const ratio = Math.min(dist / CFG.MAX_DRAG, 1);
+                this.aimPower = ratio * CFG.MAX_POWER;
+                this.setPower(ratio, 'ความแรง');
+                if (ratio > 0.04) {
+                    this.shootVector = new THREE.Vector3(sx / dist, 0, sz / dist);
+                    this.showArrow(P, this.shootVector.x, this.shootVector.z, ratio);
+                } else {
+                    this.arrowGroup.visible = false;
+                    this.shootVector = null;
+                }
+            }
+
+            showArrow(P, dx, dz, ratio) {
+                const m = P.marble;
+                this.arrowShaftMat.color.set(P.color);
+                this.arrowHeadMat.color.set(P.color).offsetHSL(0, 0, 0.15);
+                this.arrowGroup.position.set(m.x, m.y + 0.05, m.z);
+                this.arrowGroup.lookAt(m.x + dx, m.y + 0.05, m.z + dz);
+                const s = 0.5 + ratio * 1.5;
+                this.arrowShaft.scale.set(1, s, 1);
+                this.arrowShaft.position.z = s * 0.9;
+                this.arrowHead.position.z = s * 1.8 + 0.1;
+                this.arrowGroup.visible = true;
+            }
+
+            cancelAiming() {
+                this.isAiming = false; this.aimStart = null; this.aimPower = 0; this.shootVector = null;
+                if (this.arrowGroup && this.state !== 'botAim') this.arrowGroup.visible = false;
+                if (this.state !== 'botAim') this.showPower(false);
+            }
+
+            adjustZoom(delta) { this.targetFov = clamp(this.targetFov + delta, this.minFov, this.maxFov); }
+            zoomByFactor(f) { if (isFinite(f) && f > 0) this.targetFov = clamp(this.targetFov * f, this.minFov, this.maxFov); }
+            resetZoom() { this.targetFov = this.defaultFov; }
+
+            // ---------------------------------------------------------------
+            // UI
+            // ---------------------------------------------------------------
+            setupUI() {
+                const on = (id, fn) => {
+                    const el = document.getElementById(id);
+                    el.addEventListener('click', (e) => { e.stopPropagation(); fn(e); });
+                    el.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+                    el.addEventListener('mousedown', (e) => e.stopPropagation());
+                };
+                on('zoom-in-btn', () => this.adjustZoom(-5));
+                on('zoom-out-btn', () => this.adjustZoom(5));
+                on('zoom-reset-btn', () => this.resetZoom());
+                on('settings-btn', () => this.openSettings());
+                on('reset-btn', () => this.startMatch());
+                on('cam-toggle-btn', () => {
+                    this.cameraViewMode = (this.cameraViewMode + 1) % 3;
+                    if (this.cameraViewMode === 2) this.controls.target.set(this.hole.x, this.hole.base, -2.0);
+                    this.cancelAiming();
+                    this.toast(['🎥 กล้อง: ติดตามลูกแก้ว', '🎥 กล้อง: มุมสูง', '🎥 กล้อง: อิสระ 3D (หมุนดูได้)'][this.cameraViewMode]);
+                });
+                on('audio-toggle-btn', () => {
+                    audio.enabled = !audio.enabled;
+                    document.getElementById('audio-toggle-btn').innerText = audio.enabled ? '🔊' : '🔇';
+                });
+                on('start-btn', () => this.startMatch());
+                on('resume-btn', () => this.closeSettings());
+                on('again-btn', () => this.startMatch());
+                on('over-settings-btn', () => { document.getElementById('over-modal').classList.remove('show'); this.openSettings(); });
+
+                document.querySelectorAll('#settings-modal .opt').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const grp = btn.dataset.group, val = btn.dataset.val;
+                        if (grp === 'theme') { this.themeKey = val; this.buildTheme(); }   // เปลี่ยนธีมเห็นผลทันที
+                        else if (grp === 'stage') this.pending.stage = +val;
+                        else if (grp === 'bots') this.pending.bots = +val;
+                        else if (grp === 'level') this.pending.level = val;
+                        this.syncSettingsUI();
+                    });
+                });
+            }
+
+            syncSettingsUI() {
+                const cur = { theme: this.themeKey, stage: String(this.pending.stage), bots: String(this.pending.bots), level: this.pending.level };
+                document.querySelectorAll('#settings-modal .opt').forEach(b => b.classList.toggle('sel', cur[b.dataset.group] === b.dataset.val));
+                const changed = this.pending.stage !== this.stage || this.pending.bots !== this.botCount || this.pending.level !== this.botLevel;
+                const canResume = this.matchStarted && this.state !== 'over';
+                document.getElementById('resume-btn').style.display = canResume ? 'block' : 'none';
+                document.getElementById('start-btn').innerText = this.matchStarted ? (changed ? '▶ เริ่มเกมใหม่ด้วยค่านี้' : '🔄 เริ่มเกมใหม่') : '▶ เริ่มเกม';
+            }
+
+            openSettings() {
+                this.cancelAiming();
+                this.paused = true;
+                this.pending = { stage: this.stage, bots: this.botCount, level: this.botLevel };
+                this.syncSettingsUI();
+                document.getElementById('settings-modal').classList.add('show');
+            }
+
+            closeSettings() {
+                document.getElementById('settings-modal').classList.remove('show');
+                this.paused = false;
+            }
+
+            closeModals() {
+                document.getElementById('settings-modal').classList.remove('show');
+                document.getElementById('over-modal').classList.remove('show');
+            }
+
+            buildChips() {
+                const box = document.getElementById('hud-top');
+                box.innerHTML = '';
+                this.players.forEach(p => {
+                    const d = document.createElement('div');
+                    d.className = 'pchip glass'; d.id = 'chip-' + p.idx;
+                    d.innerHTML = `<span class="dot" style="background:${p.color}"></span><span class="nm"></span><span class="lv"></span><span class="sc">0</span>`;
+                    box.appendChild(d);
+                });
+            }
+
+            updateHUD() {
+                this.players.forEach(p => {
+                    const d = document.getElementById('chip-' + p.idx);
+                    if (!d) return;
+                    d.querySelector('.nm').textContent = (p.blessed ? '👑 ' : '') + (this.isShielded(p) ? '🛡️ ' : '') + p.name;
+                    d.querySelector('.lv').textContent = '●'.repeat(Math.max(p.lives, 0)) + '○'.repeat(CFG.LIVES - Math.max(p.lives, 0));
+                    d.querySelector('.sc').textContent = p.score;
+                    d.classList.toggle('active', p.idx === this.current && this.state !== 'over');
+                    d.classList.toggle('out', p.out);
+                });
+                const P = this.players[this.current];
+                const pill = document.getElementById('turn-pill');
+                if (!P) { pill.innerHTML = 'ตั้งค่าแล้วกดเริ่มเกม'; return; }
+                const who = P.isBot ? `${P.name} 🤖` : 'คุณ';
+                const phase = this.phase === 'toss' ? 'ขึ้นตาด' : (P.blessed ? 'เจ้า 👑 ดีดกิน' : 'หาหลุมชุบตัว');
+                pill.innerHTML = `ตาของ <b>${who}</b> · ${phase} <span class="meta">· ด่าน ${this.stage} ${THEMES[this.themeKey].name}</span>`;
+            }
+
+            setPower(ratio, label) {
+                document.getElementById('power-fill').style.width = (ratio * 100).toFixed(0) + '%';
+                document.getElementById('power-txt').textContent = `${label} ${(ratio * 100).toFixed(0)}%`;
+            }
+            showPower(show) { document.getElementById('power-wrap').classList.toggle('show', !!show); }
+
+            toast(msg) {
+                const t = document.getElementById('toast');
+                t.textContent = msg; t.style.opacity = '1';
+                clearTimeout(this.toastTimer);
+                this.toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2600);
+            }
+
+            showGameOver() {
+                const ranked = this.players.slice().sort((a, b) => (a.out - b.out) || (b.score - a.score));
+                const me = this.players[0];
+                const winner = ranked[0];
+                document.getElementById('over-title').textContent = !me.out && winner === me ? '🏆 คุณชนะ!' : (me.out ? '😢 ลูกแก้วคุณหมดแล้ว' : `🏆 ${winner.name} ชนะ`);
+                document.getElementById('over-sub').textContent = `ด่าน ${this.stage} ${STAGE_NAMES[this.stage]} · ${THEMES[this.themeKey].name} · บอท${BOT_LEVELS[this.botLevel].label}`;
+                document.getElementById('over-list').innerHTML = ranked.map((p, i) =>
+                    `<div class="stand"><b>${i + 1}</b><span class="dot" style="background:${p.color}"></span>${p.blessed ? '👑 ' : ''}${p.name}<span style="opacity:.7;font-size:11px">${p.out ? 'ตกรอบ' : 'เหลือ ' + p.lives + ' ลูก'}</span><span class="sc">${p.score}</span></div>`
+                ).join('');
+                document.getElementById('over-modal').classList.add('show');
+                this.updateHUD();
+            }
+
+            // ---------------------------------------------------------------
+            // CAMERA
+            // ---------------------------------------------------------------
+            cameraTargetFor(P) {
+                if (this.phase === 'play' && P.blessed && P.marble) {
+                    let best = null, bd = Infinity;
+                    this.activeMarbles().forEach(m => {
+                        if (m.player === P.idx || m.eaten || m.shield) return;
+                        const d = Math.hypot(m.x - P.marble.x, m.z - P.marble.z);
+                        if (d < bd) { bd = d; best = m; }
+                    });
+                    if (best) return { x: best.x, z: best.z };
+                }
+                return { x: this.hole.x, z: this.hole.z };
+            }
+
+            updateCamera(dt) {
+                const k = 1 - Math.pow(1 - 0.08, dt * 60);
+                // จอแนวตั้ง: ขยายมุมมองแนวตั้งให้เห็นด้านข้างพอๆ กับจอแนวนอน
+                let vf = this.targetFov;
+                const asp = this.camera.aspect;
+                if (asp < 1) vf = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(this.targetFov) / 2) * 0.8 / asp));
+                vf = Math.min(vf, 88);
+                this.camera.fov += (vf - this.camera.fov) * Math.min(1, k * 1.5);
+                this.camera.updateProjectionMatrix();
+
+                if (this.cameraViewMode === 1) {
+                    this.controls.enabled = false;
+                    this.camera.position.lerp(new THREE.Vector3(0, 13.5, 3.2), k);
+                    this.camera.lookAt(0, this.hole.base * 0.5, -2.1);
+                    this.camLook = null;
+                    return;
+                }
+                if (this.cameraViewMode === 2) { this.controls.enabled = true; this.controls.update(); this.camLook = null; return; }
+
+                this.controls.enabled = false;
+                const P = this.players[this.current];
+                const m = P && P.marble && !P.marble.removed ? P.marble : null;
+                if (!m || this.state === 'menu') {
+                    this.camera.position.lerp(this.cameraDefaultPos, k * 0.75);
+                    const look = new THREE.Vector3(0, this.hole.base * 0.5, -2.2);
+                    if (!this.camLook) this.camLook = look.clone(); else this.camLook.lerp(look, k);
+                    this.camera.lookAt(this.camLook);
+                    return;
+                }
+                const frozen = this.state === 'moving' || this.state === 'resolving';
+                const tgt = this.cameraTargetFor(P);
+                const dx = tgt.x - m.x, dz = tgt.z - m.z, dist = Math.hypot(dx, dz);
+                if (!frozen && dist > 0.05) {
+                    const want = new THREE.Vector2(dx / dist, dz / dist);
+                    this.camDir.lerp(want, k).normalize();
+                }
+                const dir = this.camDir;
+                const back = clamp(4.0 + dist * 0.12, 3.8, 6.0);
+                const target = new THREE.Vector3(m.x - dir.x * back, m.y + 2.7 + Math.min(dist, 8) * 0.08, m.z - dir.y * back);
+                target.x = clamp(target.x, -22, 22); target.z = clamp(target.z, -22, 22);
+                target.y = Math.max(target.y, this.getTerrainHeight(target.x, target.z) + 1.2);
+                const lookDist = Math.min(dist * 0.5, 3.0);
+                const look = new THREE.Vector3(m.x + dir.x * lookDist, m.y + 0.25, m.z + dir.y * lookDist);
+                this.camera.position.lerp(target, k);
+                if (!this.camLook) this.camLook = look.clone(); else this.camLook.lerp(look, k);
+                if (this.shake > 0.001) {   // กล้องสั่นเบาๆ ตอนดีดแรง
+                    this.camera.position.x += (Math.random() - 0.5) * this.shake;
+                    this.camera.position.y += (Math.random() - 0.5) * this.shake;
+                    this.shake = Math.max(0, this.shake - dt * 0.35);
+                }
+                this.camera.lookAt(this.camLook);
+            }
+
+            // ---------------------------------------------------------------
+            // MAIN TICK (แยกจากการ render เพื่อให้ทดสอบ/เร่งเวลาได้)
+            // ---------------------------------------------------------------
+            tick(dt) {
+                this.time += dt;
+                if (!this.paused) {
+                    if (this.timers.length) {
+                        const due = [];
+                        this.timers = this.timers.filter(tm => { tm.t -= dt; if (tm.t <= 0) { due.push(tm.fn); return false; } return true; });
+                        due.forEach(fn => fn());
+                    }
+
+                    this.accum += dt;
+                    let n = 0;
+                    while (this.accum >= CFG.STEP && n < 5) { this.physicsStep(CFG.STEP); this.accum -= CFG.STEP; n++; }
+                    if (n === 5) this.accum = 0;
+
+                    if (this.state === 'moving') {
+                        this.shot.t += dt;
+                        const act = this.activeMarbles();
+                        const timeout = this.shot.t > CFG.SHOT_TIMEOUT;
+                        if (timeout) act.forEach(m => { m.vx = m.vz = 0; m.moving = false; });
+                        if (timeout || act.every(m => !m.moving)) {
+                            this.state = 'resolving';
+                            if (timeout) this.log.push('timeout');
+                            this.after(0.35, () => this.resolveShot());
+                        }
+                    } else if (this.state === 'botThink') {
+                        this.stateTimer -= dt;
+                        if (this.stateTimer <= 0) {
+                            const P = this.players[this.current];
+                            const plan = this.planBotShot(this.current);
+                            const tgt = plan.tgt ? plan.tgt : this.hole;
+                            const a0 = Math.atan2(tgt.z - P.marble.z, tgt.x - P.marble.x);
+                            this.botAim = { plan, from: a0 + (Math.random() < 0.5 ? -1 : 1) * 0.45, t: 0, dur: 1.0 };
+                            this.state = 'botAim';
+                            this.showPower(true);
+                        }
+                    } else if (this.state === 'botAim') {
+                        const b = this.botAim, P = this.players[this.current];
+                        b.t += dt;
+                        const u = Math.min(b.t / b.dur, 1), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+                        const a = b.from + (b.plan.a - b.from) * e;
+                        const ratio = (b.plan.p / CFG.MAX_POWER) * e;
+                        this.showArrow(P, Math.cos(a), Math.sin(a), ratio);
+                        this.setPower(ratio, `🤖 ${P.name}`);
+                        if (b.t >= b.dur + 0.3) {
+                            this.fire(this.current, Math.cos(b.plan.a), Math.sin(b.plan.a), b.plan.p);
+                            this.log.push(`shot ${this.current} ${b.plan.eatMode ? 'eat' : 'hole'} found=${b.plan.found} ${this.lastPlanMs.toFixed(0)}ms`);
+                        }
+                    }
+                }
+
+                // เอฟเฟกต์
+                if (this.particles.length) this.particles = this.particles.filter(p => {
+                    p.t += dt;
+                    const u = p.t / p.life;
+                    p.sp.position.x += p.vx * dt; p.sp.position.y += p.vy * dt; p.sp.position.z += p.vz * dt;
+                    p.vx *= 0.92; p.vz *= 0.92;
+                    p.sp.scale.setScalar(0.15 + u * 0.45);
+                    p.sp.material.opacity = 0.55 * (1 - u);
+                    if (u >= 1) { this.scene.remove(p.sp); p.sp.material.dispose(); return false; }
+                    return true;
+                });
+                this.marbles.forEach(m => {
+                    if (m.removed) return;
+                    if (m.spawnT < 1) { m.spawnT = Math.min(1, m.spawnT + dt * 3.5); m.mesh.scale.setScalar(Math.max(0.01, m.spawnT)); }
+                    const p = this.players[m.player];
+                    const showAura = p && p.blessed && !m.holed && !m.eaten;
+                    m.aura.visible = !!showAura;
+                    if (showAura) {
+                        const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
+                        m.aura.position.set(m.x, this.getTerrainHeight(m.x, m.z) + 0.04, m.z);
+                        m.aura.scale.setScalar(1 + pulse * 0.12);
+                        m.aura.material.opacity = 0.3 + pulse * 0.35;
+                    }
+                });
+                this.dying = this.dying.filter(d => {
+                    d.t += dt;
+                    const k = Math.max(0, 1 - d.t / 0.5);
+                    d.m.mesh.scale.setScalar(Math.max(0.01, k));
+                    d.m.mesh.position.y += dt * 1.5;
+                    if (d.t >= 0.5) { this.removeMarbleMesh(d.m); this.marbles = this.marbles.filter(m => m !== d.m); return false; }
+                    return true;
+                });
+                this.players.forEach(p => {
+                    if (!p.tag) return;
+                    const m = p.marble;
+                    p.tag.visible = !!(m && !m.removed && !p.out);
+                    if (p.tag.visible) p.tag.position.set(m.x, m.y + 0.5, m.z);
+                });
+                this.animated.forEach(fn => fn(this.time));
+                this.updateCamera(dt);
+                this.updateFades(dt);
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                const dt = Math.min(this.clock.getDelta(), 0.05);
+                this.tick(dt);
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        window.addEventListener('load', () => {
+            try {
+                window.game = new MarbleGame();
+            } catch (err) {
+                showFatal(err.stack || err.message);
+            }
+        });
+    </script>
+</body>
+</html>
