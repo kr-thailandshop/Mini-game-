@@ -52,6 +52,7 @@
         .pchip .sc { margin-left: auto; font-weight: 800; color: #fcd34d; flex: none; }
         .pchip.active { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold), 0 0 10px rgba(251,191,36,.55); }
         .pchip.out { opacity: .38; }
+        .pchip.blessed .nm { color: #fcd34d; }
         .pchip.out .nm { text-decoration: line-through; }
 
         #turn-pill {
@@ -140,20 +141,7 @@
         .stand .dot { width: 11px; height: 11px; border-radius: 50%; }
         .stand .sc { margin-left: auto; font-weight: 800; color: #fcd34d; }
 
-        /* ข้อความเด้งกลางจอ + พลุกระดาษ */
-        #big-pop {
-            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) scale(.3);
-            font-size: 36px; font-weight: 800; color: #ffe27a; white-space: nowrap; opacity: 0; pointer-events: none;
-            text-shadow: 0 2px 0 #7a3a00, 0 0 18px rgba(255,190,60,.8), 0 3px 8px rgba(0,0,0,.6);
-        }
-        #big-pop.show { animation: bigpop 1.5s ease-out forwards; }
-        @keyframes bigpop {
-            0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
-            14%  { opacity: 1; transform: translate(-50%, -50%) scale(1.22); }
-            26%  { transform: translate(-50%, -50%) scale(1); }
-            72%  { opacity: 1; transform: translate(-50%, -58%) scale(1); }
-            100% { opacity: 0; transform: translate(-50%, -75%) scale(.95); }
-        }
+        /* พลุกระดาษ */
         #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 40; overflow: hidden; }
         .cf { position: absolute; top: -14px; border-radius: 2px; animation-name: cffall; animation-timing-function: linear; animation-fill-mode: forwards; }
         @keyframes cffall { to { transform: translate3d(var(--dx), 108vh, 0) rotate(var(--rot)); } }
@@ -180,7 +168,6 @@
         <div id="hud-top"></div>
         <div id="turn-pill" class="glass">กำลังเตรียมเกม...</div>
         <div id="toast" class="glass"></div>
-        <div id="big-pop"></div>
 
         <div id="zoom-col">
             <button id="zoom-in-btn" class="ghost-btn" title="ซูมเข้า">＋</button>
@@ -250,7 +237,7 @@
                 <summary>📜 กติกาหยอดหลุมดีดกิน</summary>
                 <ol>
                     <li><b>ขึ้นตาด:</b> ทุกคนดีดจากเส้นเมือง ใครใกล้หลุมที่สุด (หรือลงหลุม) ได้เล่นก่อน</li>
-                    <li><b>ชุบตัว:</b> ต้องดีดลูกตัวเองลงหลุมก่อน (+100) จึงจะเป็น "เจ้า" 👑 และได้ดีดต่อ</li>
+                    <li><b>ชุบตัว:</b> ต้องดีดลูกตัวเองลงหลุมก่อน (+100) จึงจะเป็น "เจ้า" (วงแหวนทองใต้ลูก) และได้ดีดต่อ</li>
                     <li><b>ดีดต่อจากจุดที่หยุด:</b> ลูกหยุดตรงไหน ตาหน้าดีดจากตรงนั้น</li>
                     <li><b>ดีดกิน:</b> เจ้าดีดโดนลูกคู่แข่ง +200 คู่แข่งเสียลูก 1 ลูก และได้ดีดต่อ</li>
                     <li><b>สลับตา:</b> ไม่ลงหลุมหรือดีดไม่โดน = เปลี่ยนคนเล่น · ใครลูกแก้วหมด 3 ลูกตกรอบ</li>
@@ -809,7 +796,7 @@
             if (blessed) { x.strokeStyle = '#fbbf24'; x.lineWidth = 4; x.stroke(); }
             x.fillStyle = color; x.beginPath(); x.arc(32, 36, 12, 0, Math.PI * 2); x.fill();
             x.fillStyle = '#fff'; x.font = '600 32px Kanit, sans-serif'; x.textBaseline = 'middle';
-            x.fillText((blessed ? '👑 ' : '') + (shielded ? '🛡️ ' : '') + name, 54, 38);
+            x.fillText((shielded ? '🛡️ ' : '') + name, 54, 38);
             return new THREE.CanvasTexture(c);
         }
 
@@ -1646,13 +1633,8 @@
             }
 
             // ---------------------------------------------------------------
-            // อรรถรส: เสียงพากย์ + ข้อความเด้ง + พลุกระดาษ + สั่น
+            // อรรถรส: เสียงพากย์ + พลุกระดาษ + ประกายทอง + สั่น
             // ---------------------------------------------------------------
-            bigPop(text, color) {
-                const el = document.getElementById('big-pop');
-                el.textContent = text; el.style.color = color || '';
-                el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
-            }
             confetti(n) {
                 const box = document.getElementById('confetti'), cols = ['#ffd54a', '#ff5252', '#40c4ff', '#69f0ae', '#ff80ab', '#ffffff', '#ffab40'];
                 for (let i = 0; i < n; i++) {
@@ -1672,31 +1654,26 @@
                 audio.playSparkle();
                 this.spawnSparkle(this.hole.x, this.hole.base + 0.1, this.hole.z);
                 if (this.phase === 'toss') {
-                    if (me) { voice.say(['ลงหลุมเลย ได้เล่นก่อนแน่นอน', 'โอ้โห ลงตั้งแต่ขึ้นตาด']); this.bigPop('ลงหลุม! 🎯'); this.buzz([40, 40, 80]); }
+                    if (me) { voice.say(['ลงหลุมเลย ได้เล่นก่อนแน่นอน', 'โอ้โห ลงตั้งแต่ขึ้นตาด']); this.buzz([40, 40, 80]); }
                     else voice.say(`${P.name} ลงหลุม`, { minor: true });
                     return;
                 }
                 audio.playApplause(me ? 1.8 : 1.0, me ? 0.5 : 0.3);
                 if (me) {
-                    voice.say(['ลงหลุม! ชุบตัวแล้ว', 'เย้! เป็นเจ้าแล้ว', 'สุดยอด ลงพอดีเป๊ะ', 'แม่นมาก ชุบตัวสำเร็จ']);
-                    this.bigPop('ลงหลุม! 👑'); this.confetti(40); this.buzz([40, 40, 90]);
+                    voice.say(['ลงหลุม! ชุบตัวแล้ว', 'เย้! เป็นเจ้าแล้ว', 'สุดยอด ลงพอดีเป๊ะ', 'แม่นมาก ชุบตัวสำเร็จ']); this.confetti(40); this.buzz([40, 40, 90]);
                 } else {
                     voice.say([`${P.name} ชุบตัวแล้ว ระวังนะ`, `แย่แล้ว ${P.name} เป็นเจ้าแล้ว`]);
-                    this.bigPop(`${P.name} ชุบตัว 👑`, '#9fd3ff');
                 }
             }
 
             onEatEvent(shooterIdx, victimIdx) {
                 const S = this.players[shooterIdx], V = this.players[victimIdx];
                 if (shooterIdx === 0) {
-                    voice.say(['กินแล้ว!', 'โดนเต็มๆ', 'เสร็จเรา!', 'กินเรียบ!']);
-                    this.bigPop('กิน! 💥'); this.confetti(25); this.buzz(90); audio.playApplause(1.2, 0.4);
+                    voice.say(['กินแล้ว!', 'โดนเต็มๆ', 'เสร็จเรา!', 'กินเรียบ!']); this.confetti(25); this.buzz(90); audio.playApplause(1.2, 0.4);
                 } else if (victimIdx === 0) {
-                    voice.say(['โอ๊ย! โดนกินซะแล้ว', 'แย่แล้ว ลูกเราโดนกิน']);
-                    this.bigPop('โดนกิน! 😱', '#ff8a80'); this.buzz([120, 60, 120]);
+                    voice.say(['โอ๊ย! โดนกินซะแล้ว', 'แย่แล้ว ลูกเราโดนกิน']); this.buzz([120, 60, 120]);
                 } else {
                     voice.say(`${S.name} กิน ${V.name}`, { minor: true });
-                    this.bigPop('กิน! 💥', '#9fd3ff');
                 }
             }
 
@@ -1713,19 +1690,18 @@
                     if (this.nextPlayerAfter(P.idx) === 0 && Math.random() < 0.5) voice.say([`${P.name} พลาด ตาเราแล้ว`, 'บอทพลาด! ถึงตาเรา'], { minor: true });
                     return;
                 }
-                let line, pop;
+                let line;
                 if (s.blessedAtStart) {
-                    line = ['ไม่โดน! เสียดาย', 'เฉียดไปนิดเดียว', 'พลาดเป้า']; pop = 'ไม่โดน!'; audio.playMiss();
+                    line = ['ไม่โดน! เสียดาย', 'เฉียดไปนิดเดียว', 'พลาดเป้า']; audio.playMiss();
                 } else {
                     const hx = H.x - s.sx, hz = H.z - s.sz, L = Math.hypot(hx, hz) || 1;
                     const along = ((sm.x - s.sx) * hx + (sm.z - s.sz) * hz) / L, d = Math.hypot(sm.x - H.x, sm.z - H.z);
-                    if (d < 0.9) { line = ['อีกนิดเดียว!', 'เกือบแล้ว!', 'โธ่ เฉียดหลุม']; pop = 'เกือบแล้ว!'; audio.playNearMiss(); }
-                    else if (along > L + 0.6) { line = ['แรงไป!', 'เลยหลุมไปแล้ว', 'เบามือหน่อย']; pop = 'แรงไป!'; audio.playMiss(); }
-                    else if (along < L - 0.6) { line = ['เบาไป!', 'ไม่ถึงหลุม', 'ออกแรงอีกหน่อย']; pop = 'เบาไป!'; audio.playMiss(); }
-                    else { line = ['พลาด!', 'เฉออกข้าง', 'โอ๊ย ไม่ลง']; pop = 'พลาด!'; audio.playMiss(); }
+                    if (d < 0.9) { line = ['อีกนิดเดียว!', 'เกือบแล้ว!', 'โธ่ เฉียดหลุม']; audio.playNearMiss(); }
+                    else if (along > L + 0.6) { line = ['แรงไป!', 'เลยหลุมไปแล้ว', 'เบามือหน่อย']; audio.playMiss(); }
+                    else if (along < L - 0.6) { line = ['เบาไป!', 'ไม่ถึงหลุม', 'ออกแรงอีกหน่อย']; audio.playMiss(); }
+                    else { line = ['พลาด!', 'เฉออกข้าง', 'โอ๊ย ไม่ลง']; audio.playMiss(); }
                 }
                 voice.say(line);
-                this.bigPop(pop, '#ffd0a0');
             }
 
             // ---------------------------------------------------------------
@@ -1898,7 +1874,7 @@
                 } else {
                     this.state = 'aim';
                     if (this.phase === 'toss') this.toast('🎯 ขึ้นตาด: ลากถอยหลังแล้วปล่อย ให้ใกล้หลุมที่สุด');
-                    else if (P.blessed) this.toast('👑 คุณเป็นเจ้าแล้ว! ดีดกินลูกคู่แข่ง');
+                    else if (P.blessed) this.toast('คุณเป็นเจ้าแล้ว! ดีดกินลูกคู่แข่ง');
                     else this.toast('🎯 ตาของคุณ: ดีดลงหลุมเพื่อชุบตัว');
                     if (this.phase === 'play' && Math.random() < 0.35) voice.say(P.blessed ? ['ตาเราแล้ว ไปกินเลย', 'เล็งดีๆ นะ'] : ['ตาเราแล้ว', 'ถึงตาเรา ลุยเลย'], { minor: true });
                 }
@@ -1973,7 +1949,7 @@
                 const msgs = [];
                 if (sm && sm.holed && !s.blessedAtStart) {
                     this.bless(P); extra = true;
-                    msgs.push(`👑 ${P.name} ชุบตัวสำเร็จ! (+${CFG.SCORE_BLESS})`);
+                    msgs.push(`${P.name} ชุบตัวสำเร็จ! (+${CFG.SCORE_BLESS})`);
                     this.log.push(`bless ${P.idx}`);
                 } else if (sm && sm.holed) {
                     this.placeAtRim(sm);
@@ -2407,7 +2383,8 @@
                 this.players.forEach(p => {
                     const d = document.getElementById('chip-' + p.idx);
                     if (!d) return;
-                    d.querySelector('.nm').textContent = (p.blessed ? '👑 ' : '') + (this.isShielded(p) ? '🛡️ ' : '') + p.name;
+                    d.querySelector('.nm').textContent = (this.isShielded(p) ? '🛡️ ' : '') + p.name;
+                    d.classList.toggle('blessed', p.blessed);
                     d.querySelector('.lv').textContent = '●'.repeat(Math.max(p.lives, 0)) + '○'.repeat(CFG.LIVES - Math.max(p.lives, 0));
                     d.querySelector('.sc').textContent = p.score;
                     d.classList.toggle('active', p.idx === this.current && this.state !== 'over');
@@ -2417,7 +2394,7 @@
                 const pill = document.getElementById('turn-pill');
                 if (!P) { pill.innerHTML = 'ตั้งค่าแล้วกดเริ่มเกม'; return; }
                 const who = P.isBot ? `${P.name} 🤖` : 'คุณ';
-                const phase = this.phase === 'toss' ? 'ขึ้นตาด' : (P.blessed ? 'เจ้า 👑 ดีดกิน' : 'หาหลุมชุบตัว');
+                const phase = this.phase === 'toss' ? 'ขึ้นตาด' : (P.blessed ? 'เป็นเจ้า · ดีดกิน' : 'หาหลุมชุบตัว');
                 pill.innerHTML = `ตาของ <b>${who}</b> · ${phase} <span class="meta">· ด่าน ${this.stage} ${THEMES[this.themeKey].name}</span>`;
             }
 
@@ -2438,12 +2415,10 @@
                 const humanWon = !this.players[0].out && this.players.filter(p => !p.out).length === 1;
                 if (humanWon) {
                     audio.playWin(); audio.playApplause(2.6, 0.55);
-                    voice.say(['ชนะแล้ว! เก่งที่สุดในลาน', 'เย้! แชมป์ดีดลูกแก้ว', 'สุดยอด ชนะขาดลอย']);
-                    this.bigPop('ชนะ! 🏆'); this.confetti(110); this.buzz([100, 60, 100, 60, 220]);
+                    voice.say(['ชนะแล้ว! เก่งที่สุดในลาน', 'เย้! แชมป์ดีดลูกแก้ว', 'สุดยอด ชนะขาดลอย']); this.confetti(110); this.buzz([100, 60, 100, 60, 220]);
                 } else {
                     audio.playLose();
                     voice.say(['แพ้แล้ว ไม่เป็นไรนะ ลองใหม่', 'เสียดายจัง เอาใหม่อีกตา']);
-                    this.bigPop('แพ้ 😢', '#ffb4a8');
                 }
                 const ranked = this.players.slice().sort((a, b) => (a.out - b.out) || (b.score - a.score));
                 const me = this.players[0];
@@ -2451,7 +2426,7 @@
                 document.getElementById('over-title').textContent = !me.out && winner === me ? '🏆 คุณชนะ!' : (me.out ? '😢 ลูกแก้วคุณหมดแล้ว' : `🏆 ${winner.name} ชนะ`);
                 document.getElementById('over-sub').textContent = `ด่าน ${this.stage} ${STAGE_NAMES[this.stage]} · ${THEMES[this.themeKey].name} · บอท${BOT_LEVELS[this.botLevel].label}`;
                 document.getElementById('over-list').innerHTML = ranked.map((p, i) =>
-                    `<div class="stand"><b>${i + 1}</b><span class="dot" style="background:${p.color}"></span>${p.blessed ? '👑 ' : ''}${p.name}<span style="opacity:.7;font-size:11px">${p.out ? 'ตกรอบ' : 'เหลือ ' + p.lives + ' ลูก'}</span><span class="sc">${p.score}</span></div>`
+                    `<div class="stand"><b>${i + 1}</b><span class="dot" style="background:${p.color}"></span>${p.name}<span style="opacity:.7;font-size:11px">${p.out ? 'ตกรอบ' : 'เหลือ ' + p.lives + ' ลูก'}</span><span class="sc">${p.score}</span></div>`
                 ).join('');
                 document.getElementById('over-modal').classList.add('show');
                 this.updateHUD();
