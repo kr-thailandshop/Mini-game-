@@ -178,7 +178,7 @@
             <button id="settings-btn" class="ghost-btn" title="ตั้งค่า / ด่าน / ธีม">⚙️</button>
             <button id="cam-toggle-btn" class="ghost-btn" title="สลับมุมกล้อง">🎥</button>
             <button id="reset-btn" class="ghost-btn" title="เริ่มใหม่">🔄</button>
-            <button id="audio-toggle-btn" class="ghost-btn" title="เสียง">🔊</button>
+            <button id="audio-toggle-btn" class="ghost-btn" title="เสียง: ทั้งหมด / เอฟเฟกต์ / ปิด">🔊</button>
         </div>
     </div>
 
@@ -395,69 +395,238 @@
         // =====================================================================
         // 1. WEB AUDIO SYNTHESIZER
         // =====================================================================
+        // เสียงลูกกลิ้งตามพื้นผิว (กรองเสียงซ่าให้ต่างกัน)
+        const ROLL_SURFACE = {
+            dirt:     { type: 'bandpass', f: 380,  q: 0.8, vol: 0.32, grit: 0.5 },
+            sand:     { type: 'bandpass', f: 1300, q: 0.5, vol: 0.22, grit: 0.35 },
+            concrete: { type: 'bandpass', f: 2100, q: 0.7, vol: 0.2,  grit: 0.1 },
+            grass:    { type: 'highpass', f: 2600, q: 0.5, vol: 0.1,  grit: 0.6 },
+            water:    { type: 'lowpass',  f: 900,  q: 1.0, vol: 0.3,  grit: 0.8 },
+            mud:      { type: 'lowpass',  f: 300,  q: 0.8, vol: 0.25, grit: 0.4 }
+        };
+        const THEME_SURFACE = { rural: 'dirt', temple: 'sand', school: 'dirt', grass: 'grass' };
+        const ZONE_SURFACE = { driveway: 'concrete', walkway: 'concrete', puddle: 'water', mud: 'mud', tallgrass: 'grass' };
+        // เสียงบรรยากาศ: ลม + เหตุการณ์สุ่ม (ครั้ง/วินาที)
+        const AMBIENCE = {
+            rural:  { wind: 0.07, windF: 450, events: { crickets: 0.8, bird: 0.12 } },                       // แดดเย็น จิ้งหรีด
+            temple: { wind: 0.08, windF: 600, events: { chime: 0.22, bird: 0.18, leaves: 0.05 } },           // กระดิ่งลมวัด
+            school: { wind: 0.07, windF: 550, events: { bird: 0.3, trill: 0.06 } },
+            grass:  { wind: 0.1, windF: 800, events: { bird: 0.45, trill: 0.18, leaves: 0.12, crickets: 0.08 } }   // ป่ายามเช้า
+        };
+
         class AudioSynth {
-            constructor() { this.ctx = null; this.enabled = true; }
+            constructor() { this.ctx = null; this.mode = 2; this.offset = 0; this.ambTheme = null; this.windPhase = 0; }
+            get enabled() { return this.mode > 0; }   // mode: 2 = ทั้งหมด, 1 = เอฟเฟกต์อย่างเดียว, 0 = ปิด
             init() {
-                if (!this.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) this.ctx = new AC(); }
-                if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+                if (!this.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; this.setup(new AC()); }
+                if (!this.offline && this.ctx.state === 'suspended' && !document.hidden) this.ctx.resume().catch(() => {});
+            }
+            setup(ctx) {
+                this.ctx = ctx;
+                const comp = ctx.createDynamicsCompressor();
+                comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
+                comp.connect(ctx.destination);
+                this.master = ctx.createGain(); this.master.gain.value = 0.9; this.master.connect(comp);
+                this.sfx = ctx.createGain(); this.sfx.gain.value = this.mode >= 1 ? 1 : 0; this.sfx.connect(this.master);
+                this.amb = ctx.createGain(); this.amb.gain.value = this.mode === 2 ? 0.95 : 0; this.amb.connect(this.master);
+                const len = ctx.sampleRate * 2;
+                this.white = ctx.createBuffer(1, len, ctx.sampleRate);
+                const w = this.white.getChannelData(0);
+                for (let i = 0; i < len; i++) w[i] = Math.random() * 2 - 1;
+                this.pink = ctx.createBuffer(1, len, ctx.sampleRate);
+                const pk = this.pink.getChannelData(0);
+                let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+                for (let i = 0; i < len; i++) {
+                    const x = Math.random() * 2 - 1;
+                    b0 = 0.99886 * b0 + x * 0.0555179; b1 = 0.99332 * b1 + x * 0.0750759; b2 = 0.969 * b2 + x * 0.153852;
+                    b3 = 0.8665 * b3 + x * 0.3104856; b4 = 0.55 * b4 + x * 0.5329522; b5 = -0.7616 * b5 - x * 0.016898;
+                    pk[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + x * 0.5362) * 0.11; b6 = x * 0.115926;
+                }
+                // ลูกกลิ้ง (วนต่อเนื่อง ปรับดังเบาตามความเร็ว)
+                const rs = ctx.createBufferSource(); rs.buffer = this.pink; rs.loop = true;
+                this.rollFilter = ctx.createBiquadFilter(); this.rollFilter.type = 'bandpass'; this.rollFilter.frequency.value = 400; this.rollFilter.Q.value = 0.8;
+                this.rollGain = ctx.createGain(); this.rollGain.gain.value = 0;
+                rs.connect(this.rollFilter); this.rollFilter.connect(this.rollGain); this.rollGain.connect(this.sfx); rs.start();
+                // ลมพื้นหลัง
+                const ws = ctx.createBufferSource(); ws.buffer = this.pink; ws.loop = true; ws.playbackRate.value = 0.5;
+                this.windFilter = ctx.createBiquadFilter(); this.windFilter.type = 'lowpass'; this.windFilter.frequency.value = 500;
+                this.windGain = ctx.createGain(); this.windGain.gain.value = 0;
+                ws.connect(this.windFilter); this.windFilter.connect(this.windGain); this.windGain.connect(this.amb); ws.start();
+                if (this.ambTheme) this.setAmbience(this.ambTheme);
             }
             ok() { if (!this.enabled) return false; this.init(); return !!this.ctx; }
-            tone(freq, start, dur, vol, type = 'sine') {
-                const o = this.ctx.createOscillator(), g = this.ctx.createGain();
-                o.type = type; o.frequency.setValueAtTime(freq, start);
-                g.gain.setValueAtTime(vol, start); g.gain.exponentialRampToValueAtTime(0.001, start + dur);
-                o.connect(g); g.connect(this.ctx.destination); o.start(start); o.stop(start + dur + 0.01);
+            now() { return this.ctx.currentTime + this.offset; }
+            setMode(m) {
+                this.mode = m;
+                if (!this.ctx) return;
+                const t = this.ctx.currentTime;
+                this.sfx.gain.setTargetAtTime(m >= 1 ? 1 : 0, t, 0.05);
+                this.amb.gain.setTargetAtTime(m === 2 ? 0.95 : 0, t, 0.2);
             }
+
+            // ---------- ตัวสร้างเสียงพื้นฐาน ----------
+            route(node, dest, pan) {
+                if (pan && this.ctx.createStereoPanner) { const p = this.ctx.createStereoPanner(); p.pan.value = pan; node.connect(p); p.connect(dest); }
+                else node.connect(dest);
+            }
+            tone(freq, t, dur, vol, type = 'sine', dest, attack = 0.002, pan = 0) {
+                const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+                o.type = type; o.frequency.setValueAtTime(freq, t);
+                g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + attack + dur);
+                o.connect(g); this.route(g, dest || this.sfx, pan);
+                o.start(t); o.stop(t + attack + dur + 0.02);
+                return o;
+            }
+            sweep(f0, f1, t, dur, vol, type, dest, pan) {
+                const o = this.tone(f0, t, dur, vol, type || 'sine', dest, 0.004, pan);
+                o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+                return o;
+            }
+            noise(t, dur, vol, ftype, freq, Q, dest, attack = 0.001, pan = 0) {
+                const c = this.ctx, src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+                src.buffer = this.white; f.type = ftype; f.frequency.value = freq; f.Q.value = Q || 1;
+                g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + attack + dur);
+                src.connect(f); f.connect(g); this.route(g, dest || this.sfx, pan);
+                src.start(t, Math.random() * 1.5); src.stop(t + attack + dur + 0.02);
+                return f;
+            }
+            ranat(freq, t, vol = 0.22) {   // เสียงไม้ตีลูกระนาด
+                this.tone(freq, t, 0.32, vol);
+                this.tone(freq * 3.9, t, 0.06, vol * 0.35);
+                this.noise(t, 0.012, vol * 0.5, 'bandpass', freq * 2, 2);
+            }
+            ching(t, vol = 0.12) { [2870, 4130, 5310, 6640].forEach((f, i) => this.tone(f, t, 0.9 - i * 0.15, vol / (1 + i * 0.6))); }   // ฉิ่ง
+            chap(t, vol = 0.1) { this.noise(t, 0.14, vol, 'highpass', 4000, 0.7); }   // ฉาบ
+
+            // ---------- เอฟเฟกต์ในเกม ----------
             playFlick(ratio) {
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime, o = this.ctx.createOscillator(), g = this.ctx.createGain();
-                o.type = 'sine'; o.frequency.setValueAtTime(240 + ratio * 320, now); o.frequency.exponentialRampToValueAtTime(60, now + 0.05);
-                g.gain.setValueAtTime(0.75, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-                o.connect(g); g.connect(this.ctx.destination); o.start(now); o.stop(now + 0.06);
-                if (ratio > 0.4) this.tone(85, now, 0.14, 0.35 + ratio * 0.4);   // แรงดีด "หนัก" ขึ้นเมื่อแรงมาก
+                const t = this.now();
+                this.noise(t, 0.018, 0.5, 'highpass', 1800, 0.8);            // นิ้วดีด
+                this.sweep(150, 55, t, 0.09, 0.25 + ratio * 0.4);             // แรงกระแทก
+                this.glassClack(0.35 + ratio * 0.4, t + 0.004);               // นิ้วโดนลูกแก้ว
+                if (ratio > 0.45) {                                            // ลมวูบเมื่อดีดแรง
+                    const f = this.noise(t + 0.01, 0.3, 0.1 * ratio, 'bandpass', 700, 1.2, null, 0.05);
+                    f.frequency.exponentialRampToValueAtTime(2400, t + 0.3);
+                }
             }
-            playCollision(intensity) {
+            glassClack(intensity, at) {   // ลูกแก้วกระทบกัน
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime, vol = clamp(intensity, 0.1, 1.0);
-                this.tone(1700 + Math.random() * 300, now, 0.09, vol * 0.45);
-                this.tone(2900 + Math.random() * 400, now, 0.09, vol * 0.3, 'triangle');
+                const t = at || this.now(), v = clamp(intensity, 0.05, 1), k = 0.94 + Math.random() * 0.12;
+                [[2350, 0.09, 0.32], [3900, 0.07, 0.22], [5850, 0.05, 0.14], [8300, 0.035, 0.08]].forEach(([f, d, a]) => this.tone(f * k, t, d * (0.7 + v * 0.6), v * a));
+                this.noise(t, 0.012, v * 0.4, 'bandpass', 3200, 1.5);
+            }
+            playCollision(intensity) { this.glassClack(intensity); }
+            playThud(intensity, kind) {   // ชนสิ่งกีดขวางตามวัสดุ
+                if (!this.ok()) return;
+                const t = this.now(), v = clamp(intensity, 0.08, 1);
+                if (kind === 'wood') { this.noise(t, 0.04, v * 0.45, 'bandpass', 900, 3); this.tone(235, t, 0.12, v * 0.45, 'triangle'); this.tone(470, t, 0.06, v * 0.2); }
+                else if (kind === 'ceramic') {   // โอ่ง/กระถาง: ก้องกังวาน
+                    [[330, 0.45, 0.3], [800, 0.3, 0.16], [1460, 0.2, 0.1], [2650, 0.12, 0.06]].forEach(([f, d, a]) => this.tone(f * (0.97 + Math.random() * 0.06), t, d, v * a));
+                    this.noise(t, 0.01, v * 0.4, 'bandpass', 2500, 2);
+                }
+                else if (kind === 'plastic') { this.tone(190, t, 0.1, v * 0.4, 'triangle'); this.noise(t, 0.05, v * 0.3, 'bandpass', 650, 1.5); }
+                else if (kind === 'soft') { this.noise(t, 0.2, v * 0.35, 'bandpass', 2600, 0.6, null, 0.02); this.noise(t + 0.05, 0.15, v * 0.2, 'highpass', 4500, 0.7, null, 0.02); }   // พุ่มไม้/ฟาง: กรอบแกรบ
+                else { this.noise(t, 0.018, v * 0.5, 'bandpass', 2600, 2); this.tone(1750, t, 0.04, v * 0.25); this.tone(880, t, 0.05, v * 0.2, 'triangle'); }   // หิน/ปูน
+            }
+            playSplash(intensity) {
+                if (!this.ok()) return;
+                const t = this.now(), v = clamp(intensity, 0.2, 1);
+                this.noise(t, 0.18, v * 0.55, 'lowpass', 1800, 0.7, null, 0.005);
+                for (let i = 0; i < 5; i++) this.sweep(500 + Math.random() * 500, 1100 + Math.random() * 900, t + 0.03 + i * 0.04 + Math.random() * 0.03, 0.045, v * 0.13);
             }
             playHoleDrop() {
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime;
-                [523.25, 659.25, 783.99].forEach((f, i) => this.tone(f, now + i * 0.07, 0.15, 0.35));
+                const t = this.now();
+                this.sweep(160, 70, t, 0.14, 0.5);                                   // ตุบลงดิน
+                this.noise(t, 0.08, 0.3, 'lowpass', 500, 0.8);
+                this.glassClack(0.3, t + 0.11); this.glassClack(0.15, t + 0.19);     // กระทบก้นหลุม
+                [784, 1046].forEach((f, i) => this.ranat(f, t + 0.28 + i * 0.09, 0.14));
             }
-            playBless() {
+            playBless() {   // ชุบตัว: ระนาดไล่ขึ้น + ฉิ่ง
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime;
-                [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, now + i * 0.08, 0.25, 0.3, 'triangle'));
+                const t = this.now();
+                [523, 587, 659, 784, 880, 1046].forEach((f, i) => this.ranat(f, t + i * 0.075));
+                this.ching(t + 0.45, 0.14);
             }
-            playEat() {
+            playEat() {    // ดีดกิน: กระทบแรง + ฉาบ + ระนาดลง
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime, sr = this.ctx.sampleRate;
-                const buf = this.ctx.createBuffer(1, Math.floor(sr * 0.08), sr), d = buf.getChannelData(0);
-                for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
-                const src = this.ctx.createBufferSource(), g = this.ctx.createGain();
-                src.buffer = buf; g.gain.value = 0.6; src.connect(g); g.connect(this.ctx.destination); src.start(now);
-                this.tone(880, now + 0.05, 0.12, 0.3, 'square');
-                this.tone(1320, now + 0.13, 0.18, 0.3, 'square');
+                const t = this.now();
+                this.glassClack(1, t);
+                this.chap(t + 0.02, 0.18);
+                [1046, 880, 784].forEach((f, i) => this.ranat(f, t + 0.12 + i * 0.08, 0.2));
+                this.ching(t + 0.36, 0.12);
             }
-            playThud(intensity, kind) {
+            playTurn() { if (!this.ok()) return; const t = this.now(); this.ranat(659, t, 0.08); this.ranat(784, t + 0.08, 0.08); }
+            click() { if (!this.ok()) return; this.noise(this.now(), 0.015, 0.25, 'bandpass', 2200, 2); }
+            playWin() {
                 if (!this.ok()) return;
-                const now = this.ctx.currentTime, v = clamp(intensity, 0.1, 1);
-                if (kind === 'soft') this.tone(130, now, 0.06, v * 0.3);
-                else if (kind === 'wood') { this.tone(210, now, 0.08, v * 0.5, 'triangle'); this.tone(420, now, 0.04, v * 0.2); }
-                else if (kind === 'ceramic') { this.tone(1500 + Math.random() * 300, now, 0.2, v * 0.3, 'triangle'); this.tone(2300, now, 0.12, v * 0.15); }
-                else if (kind === 'plastic') this.tone(300, now, 0.09, v * 0.4, 'triangle');
-                else { this.tone(950 + Math.random() * 200, now, 0.05, v * 0.45, 'square'); this.tone(320, now, 0.06, v * 0.3); }
+                const t = this.now();
+                [523, 659, 784, 659, 784, 880, 1046, 1046].forEach((f, i) => this.ranat(f, t + i * 0.14, 0.22));
+                [0, 0.56, 1.12].forEach(d => this.ching(t + d, 0.12));
+                this.chap(t + 1.12, 0.15);
             }
-            playTurn() {
-                if (!this.ok()) return;
-                this.tone(660, this.ctx.currentTime, 0.08, 0.15);
+            playLose() { if (!this.ok()) return; const t = this.now(); [784, 659, 587, 523, 440].forEach((f, i) => this.ranat(f, t + i * 0.2, 0.16)); }
+
+            // ---------- เสียงลูกกลิ้ง ----------
+            setRolling(speed, surface) {
+                if (!this.ctx || !this.rollGain) return;
+                const S = ROLL_SURFACE[surface] || ROLL_SURFACE.dirt, t = this.now(), x = clamp(speed / 9, 0, 1);
+                const jitter = 1 + (Math.random() - 0.5) * S.grit;
+                this.rollGain.gain.setTargetAtTime(speed < 0.2 ? 0 : Math.pow(x, 0.7) * S.vol * jitter, t, 0.03);
+                if (this.rollFilter.type !== S.type) this.rollFilter.type = S.type;
+                this.rollFilter.frequency.setTargetAtTime(S.f * (0.75 + x * 0.6), t, 0.05);
+                this.rollFilter.Q.setTargetAtTime(S.q, t, 0.1);
             }
+
+            // ---------- เสียงบรรยากาศ ----------
+            setAmbience(theme) {
+                this.ambTheme = theme;
+                if (!this.ctx) return;
+                const A = AMBIENCE[theme], t = this.now();
+                this.windGain.gain.setTargetAtTime(A.wind, t, 0.8);
+                this.windFilter.frequency.setTargetAtTime(A.windF, t, 0.5);
+            }
+            ambienceTick(dt) {
+                if (!this.ctx || this.mode !== 2 || !this.ambTheme) return;
+                if (!this.offline && this.ctx.state !== 'running') return;
+                const A = AMBIENCE[this.ambTheme];
+                this.windPhase += dt;
+                const g = A.wind * (0.75 + 0.25 * Math.sin(this.windPhase * 0.4) + 0.15 * Math.sin(this.windPhase * 1.3));
+                this.windGain.gain.setTargetAtTime(g, this.now(), 0.4);
+                for (const ev in A.events) if (Math.random() < A.events[ev] * dt) this[ev]();
+            }
+            bird() {   // นกร้องจิ๊บๆ
+                const t = this.now() + Math.random() * 0.2, pan = (Math.random() - 0.5) * 1.4, base = 2600 + Math.random() * 1800;
+                const n = 2 + Math.floor(Math.random() * 4), v = 0.025 + Math.random() * 0.03;
+                for (let i = 0; i < n; i++) this.sweep(base, base * (1.25 + Math.random() * 0.4), t + i * (0.09 + Math.random() * 0.05), 0.05 + Math.random() * 0.04, v, 'sine', this.amb, pan);
+            }
+            trill() {  // นกร้องรัว
+                const t = this.now(), pan = (Math.random() - 0.5) * 1.4, v = 0.02 + Math.random() * 0.02;
+                const o = this.tone(3200 + Math.random() * 1500, t, 0.5, v, 'sine', this.amb, 0.02, pan);
+                const lfo = this.ctx.createOscillator(), lg = this.ctx.createGain();
+                lfo.frequency.value = 22 + Math.random() * 10; lg.gain.value = 250;
+                lfo.connect(lg); lg.connect(o.frequency); lfo.start(t); lfo.stop(t + 0.55);
+            }
+            crickets() {   // จิ้งหรีด
+                const t = this.now(), pan = (Math.random() - 0.5) * 1.6, f = 4300 + Math.random() * 600, v = 0.012 + Math.random() * 0.01;
+                for (let r = 0; r < 2; r++) for (let i = 0; i < 3; i++) this.tone(f, t + r * 0.25 + i * 0.045, 0.025, v, 'sine', this.amb, 0.004, pan);
+            }
+            chime() {  // กระดิ่งลมชายคาวัด
+                const t = this.now(), notes = [1046, 1175, 1318, 1568, 1760], pan = (Math.random() - 0.5) * 1.2, n = 1 + Math.floor(Math.random() * 3);
+                for (let i = 0; i < n; i++) {
+                    const f = notes[Math.floor(Math.random() * notes.length)], st = t + i * 0.18 + Math.random() * 0.1;
+                    [1, 2.76, 5.4].forEach((m, j) => this.tone(f * m, st, 2.2 / (1 + j), 0.035 / (1 + j * 1.5), 'sine', this.amb, 0.002, pan));
+                }
+            }
+            leaves() { this.noise(this.now(), 0.8, 0.05, 'highpass', 3000, 0.5, this.amb, 0.3, (Math.random() - 0.5)); }   // ใบไม้ไหว
         }
         const audio = new AudioSynth();
         const unlockAudio = () => { audio.init(); window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio); };
+        document.addEventListener('visibilitychange', () => {   // สลับแอป/ปิดจอ → หยุดเสียงประหยัดแบต
+            if (!audio.ctx) return;
+            if (document.hidden) audio.ctx.suspend(); else audio.ctx.resume();
+        });
         window.addEventListener('pointerdown', unlockAudio);
         window.addEventListener('keydown', unlockAudio);
 
@@ -773,6 +942,7 @@
                 this.scene.fog = new THREE.FogExp2(T.fog, T.fogDensity);
                 this.ambient.color.setHex(T.ambient[0]); this.ambient.intensity = T.ambient[1];
                 this.sun.color.setHex(T.sun[0]); this.sun.intensity = T.sun[1]; this.sun.position.set(...T.sunPos);
+                audio.setAmbience(this.themeKey);
                 const mat = this.groundMesh.material;
                 if (mat.map) mat.map.dispose();
                 mat.map = createGroundTexture(T.ground, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
@@ -967,7 +1137,7 @@
                 for (const o of THEME_FIXTURES[this.themeKey]) {
                     const ph = FIXTURE_PHYS[o.k];
                     if (ph.zone) {
-                        const zn = { f: ph.zone, x: o.x, z: o.z };
+                        const zn = { f: ph.zone, x: o.x, z: o.z, kind: o.k };
                         if (o.hw) Object.assign(zn, { shape: 'rect', hw: o.hw, hd: o.hd, c: Math.cos(o.rot), s: Math.sin(o.rot) });
                         else Object.assign(zn, { shape: 'circle', r: o.r });
                         this.zones.push(zn);
@@ -1956,7 +2126,7 @@
             setupUI() {
                 const on = (id, fn) => {
                     const el = document.getElementById(id);
-                    el.addEventListener('click', (e) => { e.stopPropagation(); fn(e); });
+                    el.addEventListener('click', (e) => { e.stopPropagation(); audio.click(); fn(e); });
                     el.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
                     el.addEventListener('mousedown', (e) => e.stopPropagation());
                 };
@@ -1971,9 +2141,10 @@
                     this.cancelAiming();
                     this.toast(['🎥 กล้อง: ติดตามลูกแก้ว', '🎥 กล้อง: มุมสูง', '🎥 กล้อง: อิสระ 3D (หมุนดูได้)'][this.cameraViewMode]);
                 });
-                on('audio-toggle-btn', () => {
-                    audio.enabled = !audio.enabled;
-                    document.getElementById('audio-toggle-btn').innerText = audio.enabled ? '🔊' : '🔇';
+                on('audio-toggle-btn', () => {   // 🔊 ทั้งหมด → 🔉 เอฟเฟกต์อย่างเดียว → 🔇 ปิด
+                    audio.setMode((audio.mode + 2) % 3);
+                    document.getElementById('audio-toggle-btn').innerText = ['🔇', '🔉', '🔊'][audio.mode];
+                    this.toast(['🔇 ปิดเสียง', '🔉 เสียงเอฟเฟกต์อย่างเดียว (ปิดเสียงบรรยากาศ)', '🔊 เปิดเสียงทั้งหมด'][audio.mode]);
                 });
                 on('start-btn', () => this.startMatch());
                 on('resume-btn', () => this.closeSettings());
@@ -2063,6 +2234,8 @@
             }
 
             showGameOver() {
+                const humanWon = !this.players[0].out && this.players.filter(p => !p.out).length === 1;
+                if (humanWon) audio.playWin(); else audio.playLose();
                 const ranked = this.players.slice().sort((a, b) => (a.out - b.out) || (b.score - a.score));
                 const me = this.players[0];
                 const winner = ranked[0];
@@ -2161,6 +2334,20 @@
                     while (this.accum >= CFG.STEP && n < 5) { this.physicsStep(CFG.STEP); this.accum -= CFG.STEP; n++; }
                     if (n === 5) this.accum = 0;
 
+                    // เสียงลูกกลิ้งตามพื้นผิว + น้ำกระเซ็นตอนลงแอ่งน้ำ
+                    if (audio.ctx) {
+                        let fast = 0, surf = THEME_SURFACE[this.themeKey];
+                        for (const m of this.activeMarbles()) {
+                            const sp = Math.hypot(m.vx, m.vz);
+                            let zk = null;
+                            for (const zn of this.zones) if (this.inZone(zn, m.x, m.z)) zk = zn.kind;
+                            if (zk === 'puddle' && m.zoneKind !== 'puddle' && sp > 1) audio.playSplash(sp / 8);
+                            m.zoneKind = zk;
+                            if (sp > fast) { fast = sp; surf = ZONE_SURFACE[zk] || THEME_SURFACE[this.themeKey]; }
+                        }
+                        audio.setRolling(fast, surf);
+                    }
+
                     if (this.state === 'moving') {
                         this.shot.t += dt;
                         const act = this.activeMarbles();
@@ -2238,6 +2425,8 @@
                 this.animated.forEach(fn => fn(this.time));
                 this.updateCamera(dt);
                 this.updateFades(dt);
+                if (this.paused && audio.ctx) audio.setRolling(0, 'dirt');
+                audio.ambienceTick(dt);
             }
 
             onWindowResize() {
