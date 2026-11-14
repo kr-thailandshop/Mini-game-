@@ -140,6 +140,24 @@
         .stand .dot { width: 11px; height: 11px; border-radius: 50%; }
         .stand .sc { margin-left: auto; font-weight: 800; color: #fcd34d; }
 
+        /* ข้อความเด้งกลางจอ + พลุกระดาษ */
+        #big-pop {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) scale(.3);
+            font-size: 36px; font-weight: 800; color: #ffe27a; white-space: nowrap; opacity: 0; pointer-events: none;
+            text-shadow: 0 2px 0 #7a3a00, 0 0 18px rgba(255,190,60,.8), 0 3px 8px rgba(0,0,0,.6);
+        }
+        #big-pop.show { animation: bigpop 1.5s ease-out forwards; }
+        @keyframes bigpop {
+            0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+            14%  { opacity: 1; transform: translate(-50%, -50%) scale(1.22); }
+            26%  { transform: translate(-50%, -50%) scale(1); }
+            72%  { opacity: 1; transform: translate(-50%, -58%) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, -75%) scale(.95); }
+        }
+        #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 40; overflow: hidden; }
+        .cf { position: absolute; top: -14px; border-radius: 2px; animation-name: cffall; animation-timing-function: linear; animation-fill-mode: forwards; }
+        @keyframes cffall { to { transform: translate3d(var(--dx), 108vh, 0) rotate(var(--rot)); } }
+
         #error-boundary {
             display: none; position: absolute; inset: 0; z-index: 99; padding: 24px;
             background: #450a0a; color: #fff; flex-direction: column; align-items: center; justify-content: center; text-align: center;
@@ -162,6 +180,7 @@
         <div id="hud-top"></div>
         <div id="turn-pill" class="glass">กำลังเตรียมเกม...</div>
         <div id="toast" class="glass"></div>
+        <div id="big-pop"></div>
 
         <div id="zoom-col">
             <button id="zoom-in-btn" class="ghost-btn" title="ซูมเข้า">＋</button>
@@ -181,6 +200,8 @@
             <button id="audio-toggle-btn" class="ghost-btn" title="เสียง: ทั้งหมด / เอฟเฟกต์ / ปิด">🔊</button>
         </div>
     </div>
+
+    <div id="confetti"></div>
 
     <!-- Settings Modal -->
     <div id="settings-modal" class="modal">
@@ -566,6 +587,51 @@
                 [0, 0.56, 1.12].forEach(d => this.ching(t + d, 0.12));
                 this.chap(t + 1.12, 0.15);
             }
+            playApplause(dur = 1.8, vol = 0.5) {   // เสียงปรบมือ + เสียงเชียร์
+                if (!this.ok()) return;
+                const t = this.now(), n = Math.floor(dur * 55);
+                for (let i = 0; i < n; i++) {
+                    const tt = t + Math.pow(Math.random(), 1.4) * dur, env = 1 - Math.pow((tt - t) / dur, 2);
+                    this.noise(tt, 0.018 + Math.random() * 0.02, vol * 1.8 * env * (0.4 + Math.random() * 0.6), 'bandpass', 900 + Math.random() * 1800, 1.2 + Math.random(), null, 0.001, (Math.random() - 0.5) * 1.2);
+                }
+                this.noise(t, dur * 0.8, vol * 0.3, 'bandpass', 700, 0.8, null, 0.15);
+            }
+            brass(freq, t, dur, vol, vib) {   // เสียงทรอมโบน (sawtooth ผ่าน lowpass)
+                const c = this.ctx, o = c.createOscillator(), f = c.createBiquadFilter(), g = c.createGain();
+                o.type = 'sawtooth'; o.frequency.setValueAtTime(freq, t);
+                f.type = 'lowpass'; f.frequency.value = 1100; f.Q.value = 2;
+                g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.03); g.gain.setValueAtTime(vol, t + dur * 0.7); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                o.connect(f); f.connect(g); g.connect(this.sfx);
+                if (vib) { const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = 6; lg.gain.value = vib; l.connect(lg); lg.connect(o.frequency); l.start(t); l.stop(t + dur); }
+                o.start(t); o.stop(t + dur + 0.02);
+            }
+            playMiss() {   // แตรเศร้า "แว้ แว้ แว้ แว้~"
+                if (!this.ok()) return;
+                const t = this.now();
+                [392, 370, 349].forEach((f, i) => this.brass(f, t + i * 0.26, 0.24, 0.13, 0));
+                this.brass(330, t + 0.78, 0.75, 0.13, 7);
+            }
+            playNearMiss() {   // "หวิว~" เฉียดหลุม
+                if (!this.ok()) return;
+                const t = this.now();
+                this.sweep(520, 980, t, 0.22, 0.18, 'triangle');
+                this.sweep(980, 360, t + 0.22, 0.4, 0.18, 'triangle');
+            }
+            playSuspense() {   // กลองรัวตอนลูกใกล้หลุม
+                if (!this.ok()) return;
+                const t = this.now();
+                let tt = 0;
+                for (let i = 0; i < 22; i++) {
+                    tt += 0.055 - i * 0.0015;
+                    this.noise(t + tt, 0.03, 0.12 + i * 0.009, 'bandpass', 220, 1.2);
+                    this.tone(110, t + tt, 0.04, 0.06 + i * 0.0045, 'triangle');
+                }
+            }
+            playSparkle() {   // ประกายวิ้งๆ ตอนลงหลุม
+                if (!this.ok()) return;
+                const t = this.now();
+                for (let i = 0; i < 9; i++) this.tone(2500 + Math.random() * 3500, t + i * 0.05 + Math.random() * 0.03, 0.18, 0.1, 'sine', null, 0.002, (Math.random() - 0.5));
+            }
             playLose() { if (!this.ok()) return; const t = this.now(); [784, 659, 587, 523, 440].forEach((f, i) => this.ranat(f, t + i * 0.2, 0.16)); }
 
             // ---------- เสียงลูกกลิ้ง ----------
@@ -622,10 +688,44 @@
             leaves() { this.noise(this.now(), 0.8, 0.05, 'highpass', 3000, 0.5, this.amb, 0.3, (Math.random() - 0.5)); }   // ใบไม้ไหว
         }
         const audio = new AudioSynth();
+
+        // ===== เสียงพากย์ภาษาไทย (ใช้เสียงพูดในเครื่อง ไม่ต้องโหลดไฟล์) =====
+        class Voice {
+            constructor() {
+                this.ok = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+                this.voice = null; this.noThai = false; this.lastAt = -1e9;
+                if (!this.ok) return;
+                const pick = () => {
+                    const vs = speechSynthesis.getVoices() || [];
+                    if (!vs.length) return;
+                    this.voice = vs.find(v => /^th([-_]|$)/i.test(v.lang)) || null;
+                    this.noThai = !this.voice;
+                };
+                pick();
+                if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', pick); else speechSynthesis.onvoiceschanged = pick;
+            }
+            // minor = ประโยคเสริม จะข้ามถ้าเพิ่งพูดไปไม่ถึง 2.5 วินาที
+            say(lines, opts = {}) {
+                if (!this.ok || audio.mode === 0 || document.hidden || this.noThai) return;
+                const now = performance.now();
+                if (opts.minor && now - this.lastAt < 2500) return;
+                const text = Array.isArray(lines) ? lines[Math.floor(Math.random() * lines.length)] : lines;
+                this.lastAt = now; this.lastText = text;
+                try {
+                    speechSynthesis.cancel();
+                    const u = new SpeechSynthesisUtterance(text);
+                    u.lang = 'th-TH'; if (this.voice) u.voice = this.voice;
+                    u.rate = opts.rate || 1.12; u.pitch = opts.pitch || 1.3; u.volume = 1;
+                    setTimeout(() => speechSynthesis.speak(u), 40);
+                } catch (e) { }
+            }
+            stop() { if (this.ok) try { speechSynthesis.cancel(); } catch (e) { } }
+        }
+        const voice = new Voice();
         const unlockAudio = () => { audio.init(); window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio); };
         document.addEventListener('visibilitychange', () => {   // สลับแอป/ปิดจอ → หยุดเสียงประหยัดแบต
             if (!audio.ctx) return;
-            if (document.hidden) audio.ctx.suspend(); else audio.ctx.resume();
+            if (document.hidden) { audio.ctx.suspend(); voice.stop(); } else audio.ctx.resume();
         });
         window.addEventListener('pointerdown', unlockAudio);
         window.addEventListener('keydown', unlockAudio);
@@ -1517,6 +1617,16 @@
             }
 
             // ฝุ่นตอนดีด/ชน
+            spawnSparkle(x, y, z) {   // ประกายทองพุ่งจากหลุม
+                if (!this.dustTex) this.spawnDust(x, y, z, 0, 0);
+                for (let i = 0; i < 26; i++) {
+                    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dustTex, color: i % 3 ? 0xffd54a : 0xffffff, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending }));
+                    const a = Math.random() * Math.PI * 2, r = 0.6 + Math.random() * 1.4;
+                    sp.position.set(x, y, z); sp.scale.setScalar(0.14); this.scene.add(sp);
+                    this.particles.push({ sp, vx: Math.cos(a) * r, vy: 2 + Math.random() * 2.5, vz: Math.sin(a) * r, g: 4.5, t: 0, life: 0.8 + Math.random() * 0.5, s0: 0.16, s1: 0.04, op: 1 });
+                }
+            }
+
             spawnDust(x, y, z, n, spread) {
                 if (!this.dustTex) {
                     const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -1533,6 +1643,89 @@
                     this.scene.add(sp);
                     this.particles.push({ sp, vx: Math.cos(a) * spread * (0.5 + Math.random()), vy: 0.3 + Math.random() * 0.5, vz: Math.sin(a) * spread * (0.5 + Math.random()), t: 0, life: 0.55 + Math.random() * 0.3 });
                 }
+            }
+
+            // ---------------------------------------------------------------
+            // อรรถรส: เสียงพากย์ + ข้อความเด้ง + พลุกระดาษ + สั่น
+            // ---------------------------------------------------------------
+            bigPop(text, color) {
+                const el = document.getElementById('big-pop');
+                el.textContent = text; el.style.color = color || '';
+                el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+            }
+            confetti(n) {
+                const box = document.getElementById('confetti'), cols = ['#ffd54a', '#ff5252', '#40c4ff', '#69f0ae', '#ff80ab', '#ffffff', '#ffab40'];
+                for (let i = 0; i < n; i++) {
+                    const d = document.createElement('div');
+                    d.className = 'cf';
+                    const w = 6 + Math.random() * 6;
+                    d.style.cssText = `left:${Math.random() * 100}%;width:${w}px;height:${w * 1.5}px;background:${cols[i % cols.length]};` +
+                        `animation-duration:${1.6 + Math.random() * 1.4}s;animation-delay:${Math.random() * 0.4}s;--dx:${(Math.random() - 0.5) * 160}px;--rot:${360 + Math.random() * 720}deg`;
+                    box.appendChild(d);
+                    setTimeout(() => d.remove(), 3600);
+                }
+            }
+            buzz(pattern) { if (audio.mode > 0 && navigator.vibrate) { try { navigator.vibrate(pattern); } catch (e) { } } }
+
+            onShooterHoled(P) {
+                const me = P.idx === 0;
+                audio.playSparkle();
+                this.spawnSparkle(this.hole.x, this.hole.base + 0.1, this.hole.z);
+                if (this.phase === 'toss') {
+                    if (me) { voice.say(['ลงหลุมเลย ได้เล่นก่อนแน่นอน', 'โอ้โห ลงตั้งแต่ขึ้นตาด']); this.bigPop('ลงหลุม! 🎯'); this.buzz([40, 40, 80]); }
+                    else voice.say(`${P.name} ลงหลุม`, { minor: true });
+                    return;
+                }
+                audio.playApplause(me ? 1.8 : 1.0, me ? 0.5 : 0.3);
+                if (me) {
+                    voice.say(['ลงหลุม! ชุบตัวแล้ว', 'เย้! เป็นเจ้าแล้ว', 'สุดยอด ลงพอดีเป๊ะ', 'แม่นมาก ชุบตัวสำเร็จ']);
+                    this.bigPop('ลงหลุม! 👑'); this.confetti(40); this.buzz([40, 40, 90]);
+                } else {
+                    voice.say([`${P.name} ชุบตัวแล้ว ระวังนะ`, `แย่แล้ว ${P.name} เป็นเจ้าแล้ว`]);
+                    this.bigPop(`${P.name} ชุบตัว 👑`, '#9fd3ff');
+                }
+            }
+
+            onEatEvent(shooterIdx, victimIdx) {
+                const S = this.players[shooterIdx], V = this.players[victimIdx];
+                if (shooterIdx === 0) {
+                    voice.say(['กินแล้ว!', 'โดนเต็มๆ', 'เสร็จเรา!', 'กินเรียบ!']);
+                    this.bigPop('กิน! 💥'); this.confetti(25); this.buzz(90); audio.playApplause(1.2, 0.4);
+                } else if (victimIdx === 0) {
+                    voice.say(['โอ๊ย! โดนกินซะแล้ว', 'แย่แล้ว ลูกเราโดนกิน']);
+                    this.bigPop('โดนกิน! 😱', '#ff8a80'); this.buzz([120, 60, 120]);
+                } else {
+                    voice.say(`${S.name} กิน ${V.name}`, { minor: true });
+                    this.bigPop('กิน! 💥', '#9fd3ff');
+                }
+            }
+
+            onMissEvent(P, s, sm) {
+                if (!sm) return;
+                const me = P.idx === 0, H = this.hole;
+                if (this.phase === 'toss') {
+                    if (!me) return;
+                    const d = Math.hypot(sm.x - H.x, sm.z - H.z);
+                    voice.say(d < 0.9 ? ['ใกล้หลุมมาก!', 'เกือบลงแล้ว'] : d < 2.2 ? ['ใช้ได้เลย', 'ไม่เลวนะ'] : ['ไกลไปหน่อย', 'อ่อนไปนิด'], { minor: true });
+                    return;
+                }
+                if (!me) {   // บอทพลาด: แซวบ้างเป็นบางครั้ง
+                    if (this.nextPlayerAfter(P.idx) === 0 && Math.random() < 0.5) voice.say([`${P.name} พลาด ตาเราแล้ว`, 'บอทพลาด! ถึงตาเรา'], { minor: true });
+                    return;
+                }
+                let line, pop;
+                if (s.blessedAtStart) {
+                    line = ['ไม่โดน! เสียดาย', 'เฉียดไปนิดเดียว', 'พลาดเป้า']; pop = 'ไม่โดน!'; audio.playMiss();
+                } else {
+                    const hx = H.x - s.sx, hz = H.z - s.sz, L = Math.hypot(hx, hz) || 1;
+                    const along = ((sm.x - s.sx) * hx + (sm.z - s.sz) * hz) / L, d = Math.hypot(sm.x - H.x, sm.z - H.z);
+                    if (d < 0.9) { line = ['อีกนิดเดียว!', 'เกือบแล้ว!', 'โธ่ เฉียดหลุม']; pop = 'เกือบแล้ว!'; audio.playNearMiss(); }
+                    else if (along > L + 0.6) { line = ['แรงไป!', 'เลยหลุมไปแล้ว', 'เบามือหน่อย']; pop = 'แรงไป!'; audio.playMiss(); }
+                    else if (along < L - 0.6) { line = ['เบาไป!', 'ไม่ถึงหลุม', 'ออกแรงอีกหน่อย']; pop = 'เบาไป!'; audio.playMiss(); }
+                    else { line = ['พลาด!', 'เฉออกข้าง', 'โอ๊ย ไม่ลง']; pop = 'พลาด!'; audio.playMiss(); }
+                }
+                voice.say(line);
+                this.bigPop(pop, '#ffd0a0');
             }
 
             // ---------------------------------------------------------------
@@ -1676,6 +1869,7 @@
                 this.buildChips();
                 this.updateHUD();
                 this.toast('🏁 ขึ้นตาด! ดีดจากเส้นเมืองให้ใกล้หลุมที่สุด');
+                if (voice.noThai && !this.voiceWarned) { this.voiceWarned = true; this.after(3, () => this.toast('ℹ️ เครื่องนี้ไม่มีเสียงพูดไทย: ติดตั้ง Google Text-to-Speech ภาษาไทยเพื่อฟังเสียงพากย์')); }
                 this.after(1.0, () => this.beginTurn(this.tossOrder[0]));
             }
 
@@ -1706,6 +1900,7 @@
                     if (this.phase === 'toss') this.toast('🎯 ขึ้นตาด: ลากถอยหลังแล้วปล่อย ให้ใกล้หลุมที่สุด');
                     else if (P.blessed) this.toast('👑 คุณเป็นเจ้าแล้ว! ดีดกินลูกคู่แข่ง');
                     else this.toast('🎯 ตาของคุณ: ดีดลงหลุมเพื่อชุบตัว');
+                    if (this.phase === 'play' && Math.random() < 0.35) voice.say(P.blessed ? ['ตาเราแล้ว ไปกินเลย', 'เล็งดีๆ นะ'] : ['ตาเราแล้ว', 'ถึงตาเรา ลุยเลย'], { minor: true });
                 }
             }
 
@@ -1720,7 +1915,7 @@
                 if (!m) return;
                 m.vx = dx * power; m.vz = dz * power; m.moving = true;
                 if (m.shield) { m.shield = false; this.refreshTag(P); }
-                this.shot = { shooter: pi, blessedAtStart: this.phase === 'play' && P.blessed, eaten: [], t: 0 };
+                this.shot = { shooter: pi, blessedAtStart: this.phase === 'play' && P.blessed, eaten: [], t: 0, sx: m.x, sz: m.z, suspense: false };
                 this.state = 'moving';
                 this.arrowGroup.visible = false;
                 this.showPower(false);
@@ -1755,6 +1950,7 @@
                         this.toast(`🎯 ${P.name} ขึ้นตาดลงหลุม! ได้เล่นคิวแรก`);
                         this.log.push(`toss-hole ${P.idx}`);
                     }
+                    if (!P.tossHoled) this.onMissEvent(P, s, sm);
                     knockedIn();
                     this.tossIdx++;
                     if (this.tossIdx < this.tossOrder.length) {
@@ -1766,6 +1962,7 @@
                         this.players.forEach(p => this.refreshTag(p));
                         this.log.push('order ' + this.order.join(','));
                         this.after(0.8, () => this.toast('📋 ลำดับเล่น: ' + this.order.map(i => this.players[i].name).join(' → ')));
+                        this.after(1.0, () => voice.say(this.order[0] === 0 ? ['เราได้เล่นก่อน!', 'เยี่ยม เราได้คิวแรก'] : `${this.players[this.order[0]].name} ได้เล่นก่อน`));
                         this.after(2.4, () => this.beginTurn(this.order[0]));
                     }
                     this.updateHUD();
@@ -1809,6 +2006,7 @@
                 } else {
                     const nx = this.nextPlayerAfter(P.idx);
                     if (nx !== P.idx) this.toast(`↪️ ดีดพลาด เปลี่ยนตาให้ ${this.players[nx].name}`);
+                    this.onMissEvent(P, s, sm);
                     this.after(1.1, () => this.beginTurn(nx));
                 }
             }
@@ -1899,7 +2097,9 @@
                 m.mesh.position.set(m.x, m.y, m.z);
                 audio.playHoleDrop();
                 // ตกหลุมนอกจังหวะดีด (เช่น ไหลเองหลังจบตา) = ไม่นับชุบตัว วางกลับที่ปากหลุม
-                if (this.state !== 'moving' && this.state !== 'resolving') this.placeAtRim(m);
+                if (this.state !== 'moving' && this.state !== 'resolving') { this.placeAtRim(m); return; }
+                const sh = this.shot && this.players[this.shot.shooter];
+                if (this.state === 'moving' && sh && m === sh.marble && !this.shot.blessedAtStart) this.onShooterHoled(sh);
             }
 
             // ดีดกิน: ลูกของผู้ดีด (ที่ชุบตัวแล้วตอนเริ่มดีด) ไปโดนลูกคู่แข่งโดยตรง
@@ -1916,6 +2116,7 @@
                 s.eaten.push(victim);
                 audio.playEat();
                 this.toast(`💥 ดีดกิน ${this.players[victim.player].name}!`);
+                this.onEatEvent(s.shooter, victim.player);
             }
 
             // ---------------------------------------------------------------
@@ -2235,7 +2436,15 @@
 
             showGameOver() {
                 const humanWon = !this.players[0].out && this.players.filter(p => !p.out).length === 1;
-                if (humanWon) audio.playWin(); else audio.playLose();
+                if (humanWon) {
+                    audio.playWin(); audio.playApplause(2.6, 0.55);
+                    voice.say(['ชนะแล้ว! เก่งที่สุดในลาน', 'เย้! แชมป์ดีดลูกแก้ว', 'สุดยอด ชนะขาดลอย']);
+                    this.bigPop('ชนะ! 🏆'); this.confetti(110); this.buzz([100, 60, 100, 60, 220]);
+                } else {
+                    audio.playLose();
+                    voice.say(['แพ้แล้ว ไม่เป็นไรนะ ลองใหม่', 'เสียดายจัง เอาใหม่อีกตา']);
+                    this.bigPop('แพ้ 😢', '#ffb4a8');
+                }
                 const ranked = this.players.slice().sort((a, b) => (a.out - b.out) || (b.score - a.score));
                 const me = this.players[0];
                 const winner = ranked[0];
@@ -2350,6 +2559,11 @@
 
                     if (this.state === 'moving') {
                         this.shot.t += dt;
+                        const ss = this.shot, smm = this.players[ss.shooter].marble;
+                        if (!ss.suspense && smm && !smm.holed && !ss.blessedAtStart) {
+                            const d = Math.hypot(smm.x - this.hole.x, smm.z - this.hole.z), sp = Math.hypot(smm.vx, smm.vz);
+                            if (d < 1.7 && d > 0.6 && sp > 0.4 && sp < 3.8) { ss.suspense = true; audio.playSuspense(); }
+                        }
                         const act = this.activeMarbles();
                         const timeout = this.shot.t > CFG.SHOT_TIMEOUT;
                         if (timeout) act.forEach(m => { m.vx = m.vz = 0; m.moving = false; });
@@ -2390,8 +2604,10 @@
                     const u = p.t / p.life;
                     p.sp.position.x += p.vx * dt; p.sp.position.y += p.vy * dt; p.sp.position.z += p.vz * dt;
                     p.vx *= 0.92; p.vz *= 0.92;
-                    p.sp.scale.setScalar(0.15 + u * 0.45);
-                    p.sp.material.opacity = 0.55 * (1 - u);
+                    if (p.g) p.vy -= p.g * dt;
+                    const s0 = p.s0 ?? 0.15, s1 = p.s1 ?? 0.6;
+                    p.sp.scale.setScalar(s0 + (s1 - s0) * u);
+                    p.sp.material.opacity = (p.op ?? 0.55) * (1 - u);
                     if (u >= 1) { this.scene.remove(p.sp); p.sp.material.dispose(); return false; }
                     return true;
                 });
