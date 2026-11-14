@@ -1,0 +1,70 @@
+# สร้างชุดเสียงพากย์ของเกมด้วย Gemini TTS แล้วบันทึกลงโฟลเดอร์ voice/
+# ต้องตั้งค่า secret ชื่อ GEMINI_API_KEY ก่อน (Settings → Secrets and variables → Actions)
+# กดรันเอง: แท็บ Actions → "สร้างเสียงพากย์" → Run workflow
+# รันอัตโนมัติวันละครั้ง: ทำต่อเฉพาะเมื่อชุดเสียงยังไม่ครบ (เช่น โควตาฟรีหมดกลางทาง) ถ้าครบแล้วจะจบทันที
+name: สร้างเสียงพากย์
+
+on:
+  workflow_dispatch:
+    inputs:
+      voice:
+        description: "เสียงพากย์ (ลองฟังก่อนได้ที่ aistudio.google.com/generate-speech)"
+        type: choice
+        default: Leda
+        options:
+          - Leda
+          - Puck
+          - Fenrir
+          - Zephyr
+          - Laomedeia
+          - Sadachbia
+          - Achird
+          - Aoede
+          - Sulafat
+          - Kore
+      redo:
+        description: "สร้างใหม่ทั้งหมด (ทับของเดิม)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 9 * * *"   # 16:17 น. เวลาไทย
+
+permissions:
+  contents: write
+
+concurrency:
+  group: voice-pack
+  cancel-in-progress: false
+
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: เตรียม ffmpeg
+        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+
+      - name: สร้างคลิปเสียง
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VOICE: ${{ inputs.voice }}
+          REDO: ${{ inputs.redo }}
+        run: |
+          args=()
+          if [ -n "$VOICE" ]; then args+=(--voice "$VOICE"); fi
+          if [ "$REDO" = "true" ]; then args+=(--redo); fi
+          python3 tools/make_voice.py "${args[@]}"
+
+      - name: บันทึกลงรีโป
+        if: always()
+        run: |
+          [ -d voice ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A voice
+          git diff --cached --quiet && exit 0
+          git commit -m "เสียงพากย์: อัปเดตคลิป ($(ls voice/*.mp3 2>/dev/null | wc -l) ไฟล์)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

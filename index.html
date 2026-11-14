@@ -440,6 +440,7 @@
             grass:  { wind: 0.1, windF: 800, events: { bird: 0.45, trill: 0.18, leaves: 0.12, crickets: 0.08 } }   // ป่ายามเช้า
         };
 
+        const VOX_GAIN = 1.25;
         class AudioSynth {
             constructor() { this.ctx = null; this.mode = 2; this.offset = 0; this.ambTheme = null; this.windPhase = 0; }
             get enabled() { return this.mode > 0; }   // mode: 2 = ทุกเสียง, 1 = ปิดเสียงพูด (เสียงประกอบ+บรรยากาศยังอยู่), 0 = ปิดทุกเสียง
@@ -455,6 +456,8 @@
                 this.master = ctx.createGain(); this.master.gain.value = 0.9; this.master.connect(comp);
                 this.sfx = ctx.createGain(); this.sfx.gain.value = this.mode >= 1 ? 1 : 0; this.sfx.connect(this.master);
                 this.amb = ctx.createGain(); this.amb.gain.value = this.mode >= 1 ? 0.95 : 0; this.amb.connect(this.master);
+                this.vox = ctx.createGain(); this.vox.gain.value = this.mode === 2 ? VOX_GAIN : 0; this.vox.connect(this.master);   // เสียงพากย์ (คลิป)
+                this.ducked = false;
                 const len = ctx.sampleRate * 2;
                 this.white = ctx.createBuffer(1, len, ctx.sampleRate);
                 const w = this.white.getChannelData(0);
@@ -488,6 +491,16 @@
                 const t = this.ctx.currentTime;
                 this.sfx.gain.setTargetAtTime(m >= 1 ? 1 : 0, t, 0.05);
                 this.amb.gain.setTargetAtTime(m >= 1 ? 0.95 : 0, t, 0.2);
+                this.vox.gain.setTargetAtTime(m === 2 ? VOX_GAIN : 0, t, 0.03);
+                this.ducked = false;
+            }
+            // หรี่เสียงประกอบ/บรรยากาศลงชั่วครู่ตอนมีเสียงพากย์ ให้ฟังคำพูดชัด
+            duck(on) {
+                if (!this.ctx || this.ducked === on) return;
+                this.ducked = on;
+                const t = this.ctx.currentTime, k = this.mode >= 1 ? 1 : 0;
+                this.sfx.gain.setTargetAtTime(k * (on ? 0.45 : 1), t, on ? 0.04 : 0.25);
+                this.amb.gain.setTargetAtTime(k * (on ? 0.4 : 0.95), t, on ? 0.06 : 0.3);
             }
 
             // ---------- ตัวสร้างเสียงพื้นฐาน ----------
@@ -695,36 +708,160 @@
         const audio = new AudioSynth();
 
         // ===== เสียงพากย์ภาษาไทย (ใช้เสียงพูดในเครื่อง ไม่ต้องโหลดไฟล์) =====
+        // ---------------------------------------------------------------------
+        // บทพูดทั้งหมดอยู่ในตารางนี้ที่เดียว (ต้องเป็น JSON ล้วนระหว่าง BEGIN/END)
+        // tools/make_voice.py อ่านตารางนี้ไปสร้างคลิปเสียงพากย์ทีละประโยค พร้อมกำกับอารมณ์ตาม moods
+        //   pools  : ลำดับบนลงล่าง = ลำดับความสำคัญตอนสร้างคลิป, minor = ประโยคเสริม (ข้ามถ้าเพิ่งพูดไป)
+        //   {P} {S} {V} = ชื่อบอท (แทนด้วยชื่อใน bots ตอนสร้างคลิป)
+        //   rate/pitch ใช้กับเสียงอ่านของเครื่อง (สำรอง กรณียังไม่มีชุดคลิป)
+        // ---------------------------------------------------------------------
+        /*VOICE_LINES_BEGIN*/
+        const VOICE_LINES = {
+            "persona": "natural casual spoken Thai, like a playful friend at a village marble game",
+            "bots": ["บอท 1", "บอท 2"],
+            "moods": {
+                "cheerBig": { "style": "ecstatic, shouting with joy, big smile", "rate": 1.18, "pitch": 1.4 },
+                "cheer":    { "style": "delighted and excited, bright", "rate": 1.15, "pitch": 1.35 },
+                "brag":     { "style": "gleeful, cheeky and triumphant", "rate": 1.2, "pitch": 1.35 },
+                "ouch":     { "style": "dismayed playful whine, caught off guard", "rate": 1.05, "pitch": 1.1 },
+                "console":  { "style": "gentle and consoling, a little sad but encouraging", "rate": 0.98, "pitch": 1.0 },
+                "near":     { "style": "groaning with suspense, so close", "rate": 1.05, "pitch": 1.2 },
+                "oops":     { "style": "lighthearted disappointed sigh", "rate": 1.05, "pitch": 1.1 },
+                "coach":    { "style": "friendly quick coaching tip", "rate": 1.1, "pitch": 1.2 },
+                "warn":     { "style": "playfully alarmed, urgent warning", "rate": 1.12, "pitch": 1.25 },
+                "calm":     { "style": "relaxed and friendly", "rate": 1.08, "pitch": 1.2 },
+                "hype":     { "style": "eager and pumped up, encouraging", "rate": 1.15, "pitch": 1.3 },
+                "announce": { "style": "lively game commentator announcing", "rate": 1.1, "pitch": 1.2 },
+                "tease":    { "style": "teasing and amused", "rate": 1.12, "pitch": 1.25 }
+            },
+            "pools": {
+                "win":         { "mood": "cheerBig", "lines": ["ชนะแล้ว! เก่งที่สุดในลานเลย", "เย้! แชมป์ดีดลูกแก้ว", "สุดยอด ชนะขาดลอยเลย"] },
+                "bless":       { "mood": "cheerBig", "lines": ["ลงหลุม! ชุบตัวแล้วจ้า", "เย้! เป็นเจ้าแล้ว", "สุดยอด ลงพอดีเป๊ะเลย", "แม่นมาก ชุบตัวสำเร็จ"] },
+                "missNear":    { "mood": "near",     "lines": ["อีกนิดเดียวเอง!", "เกือบแล้วเชียว!", "โธ่ เฉียดหลุมไปนิดเดียว"] },
+                "lose":        { "mood": "console",  "lines": ["แพ้แล้ว ไม่เป็นไรนะ ลองใหม่", "เสียดายจัง เอาใหม่อีกตานะ"] },
+                "eat":         { "mood": "brag",     "lines": ["กินแล้ว!", "โดนเต็มๆ เลย", "เสร็จเราล่ะ!", "กินเรียบ!"] },
+                "eaten":       { "mood": "ouch",     "lines": ["โอ๊ย! โดนกินซะแล้ว", "แย่แล้ว ลูกเราโดนกิน"] },
+                "missSide":    { "mood": "oops",     "lines": ["พลาดซะแล้ว!", "เฉออกข้างไปเลย", "โอ๊ย ไม่ลง"] },
+                "missStrong":  { "mood": "coach",    "lines": ["แรงไปแล้ว!", "เลยหลุมไปแล้ว", "เบามือหน่อยนะ"] },
+                "missWeak":    { "mood": "coach",    "lines": ["เบาไปนะ!", "ไม่ถึงหลุมเลย", "ออกแรงอีกหน่อยสิ"] },
+                "missEat":     { "mood": "oops",     "lines": ["ไม่โดน! เสียดายจัง", "เฉียดไปนิดเดียวเอง", "พลาดเป้าซะแล้ว"] },
+                "botBless":    { "mood": "warn",     "lines": ["{P} ชุบตัวแล้ว ระวังตัวนะ", "แย่แล้ว {P} เป็นเจ้าแล้ว"] },
+                "tossHoleMe":  { "mood": "cheerBig", "lines": ["ลงหลุมเลย! ได้เล่นก่อนแน่นอน", "โอ้โห ลงตั้งแต่ขึ้นตาดเลย"] },
+                "firstMe":     { "mood": "cheer",    "lines": ["เราได้เล่นก่อน!", "เยี่ยม เราได้คิวแรก"] },
+                "firstBot":    { "mood": "announce", "lines": ["{P} ได้เล่นก่อนนะ"] },
+                "tossNear":    { "mood": "cheer",    "minor": true, "lines": ["ใกล้หลุมมากเลย!", "เกือบลงแล้วเชียว"] },
+                "tossOk":      { "mood": "calm",     "minor": true, "lines": ["ใช้ได้เลยนะ", "ไม่เลวเลย"] },
+                "tossFar":     { "mood": "coach",    "minor": true, "lines": ["ไกลไปหน่อยนะ", "อ่อนไปนิดนึง"] },
+                "turn":        { "mood": "calm",     "minor": true, "lines": ["ตาเราแล้วนะ", "ถึงตาเราแล้ว ลุยเลย"] },
+                "turnBlessed": { "mood": "hype",     "minor": true, "lines": ["ตาเราแล้ว ไปกินเลย", "เล็งดีๆ นะ"] },
+                "botMiss":     { "mood": "tease",    "minor": true, "lines": ["{P} พลาด ตาเราแล้ว", "บอทพลาด! ถึงตาเราแล้ว"] },
+                "tossHoleBot": { "mood": "announce", "minor": true, "lines": ["{P} ลงหลุมไปแล้ว"] },
+                "botEat":      { "mood": "announce", "minor": true, "lines": ["{S} กิน {V} ไปแล้ว"] }
+            }
+        };
+        /*VOICE_LINES_END*/
+
+        // เสียงพากย์: ถ้ามีชุดคลิป (voice/pack.json) จะเล่นคลิปนั้น — เสียงคนพากย์มีอารมณ์ เหมือนกันทุกเครื่อง
+        // ถ้ายังไม่มีชุดคลิป ใช้เสียงอ่านของเครื่อง (เลือกเสียงไทยที่ดีที่สุดที่เครื่องมี + ปรับจังหวะ/ระดับเสียงตามอารมณ์)
         class Voice {
             constructor() {
-                this.ok = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
-                this.voice = null; this.noThai = false; this.lastAt = -1e9;
-                if (!this.ok) return;
-                const pick = () => {
-                    const vs = speechSynthesis.getVoices() || [];
-                    if (!vs.length) return;
-                    this.voice = vs.find(v => /^th([-_]|$)/i.test(v.lang)) || null;
-                    this.noThai = !this.voice;
-                };
-                pick();
-                if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', pick); else speechSynthesis.onvoiceschanged = pick;
+                this.tts = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+                this.voice = null; this.noThai = false; this.lastAt = -1e9; this.lastText = ''; this.lastKey = '';
+                this.clips = new Map(); this.hasPack = false; this.packVoice = ''; this.cur = null; this.seq = 0; this.decoded = [];
+                if (this.tts) {
+                    const score = v => (/natural|neural|online|premium|enhanced|wavenet/i.test(v.name) ? 8 : 0) + (v.localService === false ? 2 : 0)
+                        + (/google/i.test(v.name) ? 1 : 0) + (/^th[-_]TH$/i.test(v.lang) ? 1 : 0) - (/compact|espeak|eloquence/i.test(v.name) ? 6 : 0);
+                    const pick = () => {
+                        const vs = (speechSynthesis.getVoices() || []).filter(v => /^th([-_]|$)/i.test(v.lang));
+                        if (!(speechSynthesis.getVoices() || []).length) return;
+                        this.voice = vs.sort((a, b) => score(b) - score(a))[0] || null;
+                        this.noThai = !this.voice;
+                    };
+                    pick();
+                    if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', pick); else speechSynthesis.onvoiceschanged = pick;
+                }
+                this.loadPack();
             }
-            // minor = ประโยคเสริม จะข้ามถ้าเพิ่งพูดไปไม่ถึง 2.5 วินาที
-            say(lines, opts = {}) {
-                if (!this.ok || audio.mode !== 2 || document.hidden || this.noThai) return;   // พูดเฉพาะโหมดเปิดทุกเสียง
+            loadPack() {
+                if (!window.fetch || location.protocol === 'file:') return;
+                fetch('voice/pack.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(p => {
+                    if (!p || !p.clips) return;
+                    const q = p.rev ? '?r=' + p.rev : '';
+                    for (const text in p.clips) this.clips.set(text, { url: 'voice/' + p.clips[text] + q, data: null, buf: null, p: null, dp: null });
+                    this.hasPack = this.clips.size > 0; this.packVoice = p.voice || '';
+                    if (this.hasPack) this.preload();
+                }).catch(() => { });
+            }
+            preload() {   // ทยอยโหลดคลิปครั้งละ 4 ไฟล์ ตามลำดับความสำคัญ (ไม่แย่งเน็ตตอนเปิดเกม)
+                const list = [...this.clips.values()]; let i = 0;
+                const next = () => { if (i < list.length) this.fetchClip(list[i++]).then(next); };
+                for (let k = 0; k < 4; k++) next();
+            }
+            fetchClip(c) {
+                if (c.data || c.buf) return Promise.resolve(c);
+                if (!c.p) c.p = fetch(c.url).then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error('http ' + r.status)))
+                    .then(ab => { c.data = ab; c.p = null; return c; }).catch(() => { c.p = null; return c; });
+                return c.p;
+            }
+            decode(c) {
+                if (c.buf) return Promise.resolve(c.buf);
+                if (!c.data || !audio.ctx) return Promise.resolve(null);
+                if (!c.dp) c.dp = new Promise(res => {
+                    const done = b => {
+                        c.dp = null;
+                        if (b) { c.buf = b; this.decoded.push(c); while (this.decoded.length > 14) this.decoded.shift().buf = null; }   // เก็บที่ถอดรหัสแล้วไว้ไม่เกิน 14 คลิป
+                        res(b || null);
+                    };
+                    try { const pr = audio.ctx.decodeAudioData(c.data.slice(0), done, () => done(null)); if (pr && pr.catch) pr.catch(() => { }); }
+                    catch (e) { done(null); }
+                });
+                return c.dp;
+            }
+            // key = ชื่อชุดประโยคใน VOICE_LINES.pools, vars = ชื่อที่แทนใน {P} {S} {V}
+            say(key, vars) {
+                const pool = VOICE_LINES.pools[key];
+                if (!pool || audio.mode !== 2 || document.hidden) return;   // พูดเฉพาะโหมดเปิดทุกเสียง
+                if (!this.hasPack && (!this.tts || this.noThai)) return;
                 const now = performance.now();
-                if (opts.minor && now - this.lastAt < 2500) return;
-                const text = Array.isArray(lines) ? lines[Math.floor(Math.random() * lines.length)] : lines;
-                this.lastAt = now; this.lastText = text;
+                if (pool.minor && now - this.lastAt < 2500) return;         // ประโยคเสริม: ข้ามถ้าเพิ่งพูดไปไม่ถึง 2.5 วินาที
+                let lines = pool.lines.map(l => vars ? l.replace(/\{(\w)\}/g, (m, k) => vars[k] || '') : l);
+                if (this.hasPack) lines = lines.filter(l => this.clips.has(l));   // มีชุดคลิปแล้ว = ใช้เสียงเดียวตลอด ไม่สลับไปเสียงเครื่อง
+                if (!lines.length) return;
+                let text = lines[Math.floor(Math.random() * lines.length)];
+                if (lines.length > 1 && text === this.lastText) text = lines[(lines.indexOf(text) + 1) % lines.length];   // ไม่พูดประโยคเดิมซ้ำติดกัน
+                this.lastAt = now; this.lastText = text; this.lastKey = key;
+                if (this.hasPack) this.playClip(this.clips.get(text));
+                else this.speak(text, VOICE_LINES.moods[pool.mood] || {});
+            }
+            speak(text, mood) {
                 try {
                     speechSynthesis.cancel();
                     const u = new SpeechSynthesisUtterance(text);
                     u.lang = 'th-TH'; if (this.voice) u.voice = this.voice;
-                    u.rate = opts.rate || 1.12; u.pitch = opts.pitch || 1.3; u.volume = 1;
+                    u.rate = mood.rate || 1.1; u.pitch = mood.pitch || 1.25; u.volume = 1;
                     setTimeout(() => speechSynthesis.speak(u), 40);
                 } catch (e) { }
             }
-            stop() { if (this.ok) try { speechSynthesis.cancel(); } catch (e) { } }
+            async playClip(c) {
+                audio.init();
+                const ctx = audio.ctx; if (!ctx) return;
+                const token = ++this.seq, t0 = performance.now();
+                this.stopClip();
+                if (!c.buf) { if (!c.data) await this.fetchClip(c); await this.decode(c); }
+                if (!c.buf || token !== this.seq || audio.mode !== 2 || document.hidden || performance.now() - t0 > 900) return;   // มาช้าเกินจังหวะ = ไม่พูดดีกว่าพูดผิดเวลา
+                const src = ctx.createBufferSource(), g = ctx.createGain();
+                src.buffer = c.buf; src.connect(g); g.connect(audio.vox);
+                this.cur = { src, g }; audio.duck(true);
+                src.onended = () => { if (this.cur && this.cur.src === src) { this.cur = null; audio.duck(false); } };
+                src.start();
+            }
+            stopClip() {
+                const k = this.cur; if (!k) return;
+                this.cur = null;
+                try { const t = audio.ctx.currentTime; k.g.gain.setTargetAtTime(0, t, 0.015); k.src.stop(t + 0.08); } catch (e) { }
+                audio.duck(false);
+            }
+            stop() { this.seq++; this.stopClip(); if (this.tts) try { speechSynthesis.cancel(); } catch (e) { } }
         }
         const voice = new Voice();
         const unlockAudio = () => { audio.init(); window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio); };
@@ -2377,26 +2514,26 @@
                 audio.playSparkle();
                 this.spawnSparkle(this.hole.x, this.hole.base + 0.1, this.hole.z);
                 if (this.phase === 'toss') {
-                    if (me) { voice.say(['ลงหลุมเลย ได้เล่นก่อนแน่นอน', 'โอ้โห ลงตั้งแต่ขึ้นตาด']); this.buzz([40, 40, 80]); }
-                    else voice.say(`${P.name} ลงหลุม`, { minor: true });
+                    if (me) { voice.say('tossHoleMe'); this.buzz([40, 40, 80]); }
+                    else voice.say('tossHoleBot', { P: P.name });
                     return;
                 }
                 audio.playApplause(me ? 1.8 : 1.0, me ? 0.5 : 0.3);
                 if (me) {
-                    voice.say(['ลงหลุม! ชุบตัวแล้ว', 'เย้! เป็นเจ้าแล้ว', 'สุดยอด ลงพอดีเป๊ะ', 'แม่นมาก ชุบตัวสำเร็จ']); this.confetti(40); this.buzz([40, 40, 90]);
+                    voice.say('bless'); this.confetti(40); this.buzz([40, 40, 90]);
                 } else {
-                    voice.say([`${P.name} ชุบตัวแล้ว ระวังนะ`, `แย่แล้ว ${P.name} เป็นเจ้าแล้ว`]);
+                    voice.say('botBless', { P: P.name });
                 }
             }
 
             onEatEvent(shooterIdx, victimIdx) {
                 const S = this.players[shooterIdx], V = this.players[victimIdx];
                 if (shooterIdx === 0) {
-                    voice.say(['กินแล้ว!', 'โดนเต็มๆ', 'เสร็จเรา!', 'กินเรียบ!']); this.confetti(25); this.buzz(90); audio.playApplause(1.2, 0.4);
+                    voice.say('eat'); this.confetti(25); this.buzz(90); audio.playApplause(1.2, 0.4);
                 } else if (victimIdx === 0) {
-                    voice.say(['โอ๊ย! โดนกินซะแล้ว', 'แย่แล้ว ลูกเราโดนกิน']); this.buzz([120, 60, 120]);
+                    voice.say('eaten'); this.buzz([120, 60, 120]);
                 } else {
-                    voice.say(`${S.name} กิน ${V.name}`, { minor: true });
+                    voice.say('botEat', { S: S.name, V: V.name });
                 }
             }
 
@@ -2406,23 +2543,23 @@
                 if (this.phase === 'toss') {
                     if (!me) return;
                     const d = Math.hypot(sm.x - H.x, sm.z - H.z);
-                    voice.say(d < 0.9 ? ['ใกล้หลุมมาก!', 'เกือบลงแล้ว'] : d < 2.2 ? ['ใช้ได้เลย', 'ไม่เลวนะ'] : ['ไกลไปหน่อย', 'อ่อนไปนิด'], { minor: true });
+                    voice.say(d < 0.9 ? 'tossNear' : d < 2.2 ? 'tossOk' : 'tossFar');
                     return;
                 }
                 if (!me) {   // บอทพลาด: แซวบ้างเป็นบางครั้ง
-                    if (this.nextPlayerAfter(P.idx) === 0 && Math.random() < 0.5) voice.say([`${P.name} พลาด ตาเราแล้ว`, 'บอทพลาด! ถึงตาเรา'], { minor: true });
+                    if (this.nextPlayerAfter(P.idx) === 0 && Math.random() < 0.5) voice.say('botMiss', { P: P.name });
                     return;
                 }
                 let line;
                 if (s.blessedAtStart) {
-                    line = ['ไม่โดน! เสียดาย', 'เฉียดไปนิดเดียว', 'พลาดเป้า']; audio.playMiss();
+                    line = 'missEat'; audio.playMiss();
                 } else {
                     const hx = H.x - s.sx, hz = H.z - s.sz, L = Math.hypot(hx, hz) || 1;
                     const along = ((sm.x - s.sx) * hx + (sm.z - s.sz) * hz) / L, d = Math.hypot(sm.x - H.x, sm.z - H.z);
-                    if (d < 0.9) { line = ['อีกนิดเดียว!', 'เกือบแล้ว!', 'โธ่ เฉียดหลุม']; audio.playNearMiss(); }
-                    else if (along > L + 0.6) { line = ['แรงไป!', 'เลยหลุมไปแล้ว', 'เบามือหน่อย']; audio.playMiss(); }
-                    else if (along < L - 0.6) { line = ['เบาไป!', 'ไม่ถึงหลุม', 'ออกแรงอีกหน่อย']; audio.playMiss(); }
-                    else { line = ['พลาด!', 'เฉออกข้าง', 'โอ๊ย ไม่ลง']; audio.playMiss(); }
+                    if (d < 0.9) { line = 'missNear'; audio.playNearMiss(); }
+                    else if (along > L + 0.6) { line = 'missStrong'; audio.playMiss(); }
+                    else if (along < L - 0.6) { line = 'missWeak'; audio.playMiss(); }
+                    else { line = 'missSide'; audio.playMiss(); }
                 }
                 voice.say(line);
             }
@@ -2612,7 +2749,7 @@
                 this.buildChips();
                 this.updateHUD();
                 this.toast('🏁 ขึ้นตาด! ดีดจากเส้นเมืองให้ใกล้หลุมที่สุด');
-                if (voice.noThai && !this.voiceWarned) { this.voiceWarned = true; this.after(3, () => this.toast('ℹ️ เครื่องนี้ไม่มีเสียงพูดไทย: ติดตั้ง Google Text-to-Speech ภาษาไทยเพื่อฟังเสียงพากย์')); }
+                if (voice.noThai && !voice.hasPack && !this.voiceWarned) { this.voiceWarned = true; this.after(3, () => this.toast('ℹ️ เครื่องนี้ไม่มีเสียงพูดไทย: ติดตั้ง Google Text-to-Speech ภาษาไทยเพื่อฟังเสียงพากย์')); }
                 this.after(1.0, () => this.beginTurn(this.tossOrder[0]));
             }
 
@@ -2643,7 +2780,7 @@
                     if (this.phase === 'toss') this.toast('🎯 ขึ้นตาด: ลากถอยหลังแล้วปล่อย ให้ใกล้หลุมที่สุด');
                     else if (P.blessed) this.toast('คุณเป็นเจ้าแล้ว! ดีดกินลูกคู่แข่ง');
                     else this.toast('🎯 ตาของคุณ: ดีดลงหลุมเพื่อชุบตัว');
-                    if (this.phase === 'play' && Math.random() < 0.35) voice.say(P.blessed ? ['ตาเราแล้ว ไปกินเลย', 'เล็งดีๆ นะ'] : ['ตาเราแล้ว', 'ถึงตาเรา ลุยเลย'], { minor: true });
+                    if (this.phase === 'play' && Math.random() < 0.35) voice.say(P.blessed ? 'turnBlessed' : 'turn');
                 }
             }
 
@@ -2705,7 +2842,7 @@
                         this.players.forEach(p => this.refreshTag(p));
                         this.log.push('order ' + this.order.join(','));
                         this.after(0.8, () => this.toast('📋 ลำดับเล่น: ' + this.order.map(i => this.players[i].name).join(' → ')));
-                        this.after(1.0, () => voice.say(this.order[0] === 0 ? ['เราได้เล่นก่อน!', 'เยี่ยม เราได้คิวแรก'] : `${this.players[this.order[0]].name} ได้เล่นก่อน`));
+                        this.after(1.0, () => voice.say(this.order[0] === 0 ? 'firstMe' : 'firstBot', { P: this.players[this.order[0]].name }));
                         this.after(2.4, () => this.beginTurn(this.order[0]));
                     }
                     this.updateHUD();
@@ -3191,10 +3328,10 @@
                 const humanWon = !this.players[0].out && this.players.filter(p => !p.out).length === 1;
                 if (humanWon) {
                     audio.playWin(); audio.playApplause(2.6, 0.55);
-                    voice.say(['ชนะแล้ว! เก่งที่สุดในลาน', 'เย้! แชมป์ดีดลูกแก้ว', 'สุดยอด ชนะขาดลอย']); this.confetti(110); this.buzz([100, 60, 100, 60, 220]);
+                    voice.say('win'); this.confetti(110); this.buzz([100, 60, 100, 60, 220]);
                 } else {
                     audio.playLose();
-                    voice.say(['แพ้แล้ว ไม่เป็นไรนะ ลองใหม่', 'เสียดายจัง เอาใหม่อีกตา']);
+                    voice.say('lose');
                 }
                 const ranked = this.players.slice().sort((a, b) => (a.out - b.out) || (b.score - a.score));
                 const me = this.players[0];
