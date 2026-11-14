@@ -27,6 +27,7 @@
             font-family: 'Kanit', sans-serif; touch-action: none;
         }
         #game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 1; touch-action: none; }
+        #vignette { position: absolute; inset: 0; z-index: 2; pointer-events: none; background: radial-gradient(ellipse at 50% 46%, rgba(0,0,0,0) 58%, rgba(0,0,0,.26) 100%); }
         #hud { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
         .glass {
             background: var(--glass); border: 1px solid var(--glass-b);
@@ -163,6 +164,7 @@
     </div>
 
     <canvas id="game-canvas"></canvas>
+    <div id="vignette"></div>
 
     <div id="hud">
         <div id="hud-top"></div>
@@ -305,26 +307,42 @@
 
         const STAGE_NAMES = { 1: 'พื้นเรียบ', 2: 'เนินคลื่น', 3: 'เนินสลับ', 4: 'หลุมแอ่งลึก' };
 
+        const TILE = 4.2;              // ขนาดกระเบื้องลายพื้น (หน่วยโลก)
+        const HOLE_VIS_DEPTH = 0.7;    // ความลึกหลุมที่มองเห็น
+
+        // สีทุกค่าเขียนแบบ sRGB (เหมือนที่ตาเห็น) แล้วแปลงเป็น linear ตอนใช้งาน
         const THEMES = {
-            rural: {
-                name: 'ลานดินชนบท', sky: 0xe6a86c, fog: 0xd99355, fogDensity: 0.035,
-                ambient: [0xffedd4, 0.9], sun: [0xffc27a, 1.35], sunPos: [9, 10, 4], rim: 0x542d13,
-                ground: { base: '#834724', dark: 'rgba(50,25,8,A)', light: 'rgba(190,130,75,A)', grit: ['rgba(215,180,140,0.75)', 'rgba(35,18,6,0.85)'], specks: 20000, size: 1.8 }
+            rural: {   // แดดเย็นสีทอง เงาทอดยาว
+                name: 'ลานดินชนบท', fogDensity: 0.014, exposure: 0.95, env: 1.0,
+                sky: { top: 0x3f76ba, hor: 0xf2c79a, grd: 0x8a5f3c, sun: 0xffb46e, cloudCol: 0xffe2c2, glow: 1.0, cloud: 0.34 },
+                hemi: [0xffd9ae, 0x8a5a36, 0.4], sun: [0xffc488, 2.4], sunPos: [10, 6.4, 5],
+                backdrop: [0x7a7048, 0xd0b088], palms: true,
+                line: { groove: 'rgb(40,19,7)', crumb: 'rgba(236,190,144,A)' },
+                ground: { base: '#8f5230', dark: 'rgba(52,26,9,A)', light: 'rgba(200,142,88,A)', grit: ['rgba(215,180,140,0.75)', 'rgba(35,18,6,0.85)'], pebble: ['#a58c72', '#7d6a58', '#c2ad94'], specks: 20000, size: 1.8, pebbles: 150, cracks: 26, leaves: 8, bump: 2.6 }
             },
-            temple: {
-                name: 'ลานวัด', sky: 0xf1ddb0, fog: 0xe6d2a4, fogDensity: 0.024,
-                ambient: [0xfff6e0, 0.55], sun: [0xfff0c8, 0.9], sunPos: [6, 15, 6], rim: 0x7d6440,
-                ground: { base: '#c2a679', dark: 'rgba(140,110,70,A)', light: 'rgba(250,240,215,A)', grit: ['rgba(255,250,235,0.8)', 'rgba(110,85,50,0.6)'], specks: 26000, size: 1.1 }
+            temple: {  // สายๆ แดดจ้า ฟ้าใส
+                name: 'ลานวัด', fogDensity: 0.011, exposure: 0.72, env: 0.9,
+                sky: { top: 0x2f7dd4, hor: 0xcfe2f1, grd: 0xb39c74, sun: 0xfff3da, cloudCol: 0xffffff, glow: 0.55, cloud: 0.42 },
+                hemi: [0xdcebff, 0xa08c66, 0.32], sun: [0xfff0d6, 2.1], sunPos: [6.5, 11, 7.5],
+                backdrop: [0x7f9c86, 0xb4cad2], palms: true,
+                line: { groove: 'rgb(118,92,56)', crumb: 'rgba(250,240,214,A)' },
+                ground: { base: '#bfa172', dark: 'rgba(132,102,62,A)', light: 'rgba(250,240,215,A)', grit: ['rgba(255,250,235,0.8)', 'rgba(110,85,50,0.6)'], pebble: ['#d9cbb0', '#a8977a', '#efe6d2'], specks: 26000, size: 1.1, pebbles: 46, cracks: 0, leaves: 30, bump: 1.5 }
             },
-            school: {
-                name: 'ลานหน้าโรงเรียน', sky: 0x9fd3f5, fog: 0xbfe3f7, fogDensity: 0.022,
-                ambient: [0xffffff, 0.62], sun: [0xfff6e5, 1.0], sunPos: [5, 16, 7], rim: 0x5e2412,
-                ground: { base: '#9a4324', dark: 'rgba(70,20,8,A)', light: 'rgba(210,110,60,A)', grit: ['rgba(230,150,100,0.7)', 'rgba(50,15,5,0.85)'], specks: 20000, size: 1.8 }
+            school: {  // เที่ยงวัน ฟ้าสด เมฆขาว
+                name: 'ลานหน้าโรงเรียน', fogDensity: 0.01, exposure: 0.84, env: 0.95,
+                sky: { top: 0x2a76d2, hor: 0xbcdaf1, grd: 0x8a5236, sun: 0xfff6e8, cloudCol: 0xffffff, glow: 0.5, cloud: 0.5 },
+                hemi: [0xd6e8ff, 0x8a5236, 0.34], sun: [0xfff4e2, 2.3], sunPos: [5.5, 12, 8.5],
+                backdrop: [0x78987e, 0xa9c4d2], palms: false,
+                line: { groove: 'rgb(58,18,8)', crumb: 'rgba(232,150,104,A)' },
+                ground: { base: '#a04a2a', dark: 'rgba(70,20,8,A)', light: 'rgba(214,116,66,A)', grit: ['rgba(230,150,100,0.7)', 'rgba(50,15,5,0.85)'], pebble: ['#b8846a', '#8a5a48', '#d0a48c'], specks: 20000, size: 1.8, pebbles: 130, cracks: 18, leaves: 0, bump: 2.6 }
             },
-            grass: {
-                name: 'ลานในป่าหญ้า', sky: 0xcfdcd8, fog: 0xc9d6d2, fogDensity: 0.06,
-                ambient: [0xe8f2ff, 1.0], sun: [0xfff3d6, 0.95], sunPos: [-6, 9, 8], rim: 0x2f2a14,
-                ground: { base: '#566b2c', dark: 'rgba(40,55,20,A)', light: 'rgba(150,175,80,A)', grit: ['rgba(120,95,60,0.7)', 'rgba(30,40,15,0.8)'], specks: 16000, size: 1.6, grass: true }
+            grass: {   // เช้าตรู่ หมอกบาง แดดอ่อนลอดป่า
+                name: 'ลานในป่าหญ้า', fogDensity: 0.036, exposure: 0.95, env: 1.0,
+                sky: { top: 0x93b3c6, hor: 0xdfe8e2, grd: 0x55633a, sun: 0xffefcf, cloudCol: 0xf6f7f2, glow: 1.5, cloud: 0.62 },
+                hemi: [0xe4eef0, 0x5a6a38, 0.48], sun: [0xfff0cf, 1.8], sunPos: [-7, 7.2, 8],
+                backdrop: [0xb9c8bc, 0xd3ddd6], palms: false,
+                line: { groove: 'rgb(74,52,30)', crumb: 'rgba(120,96,62,A)' },
+                ground: { base: '#5b7030', dark: 'rgba(40,55,20,A)', light: 'rgba(152,178,84,A)', grit: ['rgba(120,95,60,0.7)', 'rgba(30,40,15,0.8)'], pebble: ['#8a8f7c', '#6f7566', '#a5a892'], specks: 16000, size: 1.6, pebbles: 40, cracks: 0, leaves: 10, bump: 2.2, grass: true }
             }
         };
 
@@ -720,49 +738,296 @@
         // =====================================================================
         // 2. PROCEDURAL CANVAS TEXTURES
         // =====================================================================
-        function createGroundTexture(g, anisotropy) {
-            const c = document.createElement('canvas'); c.width = c.height = 512;
-            const x = c.getContext('2d');
-            x.fillStyle = g.base; x.fillRect(0, 0, 512, 512);
-            for (let i = 0; i < g.specks; i++) {
-                const a = (Math.random() * 0.35).toFixed(3);
-                x.fillStyle = (Math.random() > 0.5 ? g.dark : g.light).replace('A', a);
-                x.beginPath(); x.arc(Math.random() * 512, Math.random() * 512, Math.random() * g.size + 0.4, 0, Math.PI * 2); x.fill();
+        let MAX_ANISO = 4;
+        function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; }
+        // opts.data = แผนที่ข้อมูล (normal map) ไม่ใช่สี · opts.repeat = false ไม่ต่อลายซ้ำ
+        function canvasTex(c, opts = {}) {
+            const t = new THREE.CanvasTexture(c);
+            if (opts.repeat !== false) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+            if (!opts.data) t.encoding = THREE.sRGBEncoding;
+            t.anisotropy = MAX_ANISO;
+            return t;
+        }
+        // แปลงภาพความสูง (ขาว = นูน) เป็น normal map ให้ผิวรับแสงเงามีมิติ
+        function normalFromHeight(hc, strength) {
+            const w = hc.width, h = hc.height, src = hc.getContext('2d').getImageData(0, 0, w, h).data;
+            const [out, ox] = mkCanvas(w, h), img = ox.createImageData(w, h), d = img.data;
+            const H = (x, y) => src[(((y + h) % h) * w + ((x + w) % w)) * 4];
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                const nx = -(H(x + 1, y) - H(x - 1, y)) / 255 * strength, ny = (H(x, y + 1) - H(x, y - 1)) / 255 * strength;
+                const l = 1 / Math.sqrt(nx * nx + ny * ny + 1), k = (y * w + x) * 4;
+                d[k] = (nx * l * 0.5 + 0.5) * 255; d[k + 1] = (ny * l * 0.5 + 0.5) * 255; d[k + 2] = (l * 0.5 + 0.5) * 255; d[k + 3] = 255;
             }
-            for (let i = 0; i < 300; i++) {
-                x.fillStyle = Math.random() > 0.4 ? g.grit[0] : g.grit[1];
-                x.fillRect(Math.random() * 512, Math.random() * 512, Math.random() * 3 + 1, Math.random() * 3 + 1);
-            }
-            if (g.grass) {
-                for (let i = 0; i < 14; i++) {   // ดินโผล่เป็นหย่อม
-                    const px = Math.random() * 512, py = Math.random() * 512, r = 20 + Math.random() * 40;
-                    const gr = x.createRadialGradient(px, py, 0, px, py, r);
-                    gr.addColorStop(0, 'rgba(110,85,50,0.45)'); gr.addColorStop(1, 'rgba(110,85,50,0)');
-                    x.fillStyle = gr; x.fillRect(px - r, py - r, r * 2, r * 2);
-                }
-                const blades = ['rgba(120,170,60,0.8)', 'rgba(70,120,40,0.8)', 'rgba(160,190,90,0.7)'];
-                x.lineWidth = 1;
-                for (let i = 0; i < 2600; i++) {
-                    const px = Math.random() * 512, py = Math.random() * 512;
-                    x.strokeStyle = blades[i % 3];
-                    x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.random() * 3 - 1.5, py - Math.random() * 7 - 2); x.stroke();
-                }
-            }
-            const tex = new THREE.CanvasTexture(c);
-            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-            tex.repeat.set(12, 12);
-            tex.anisotropy = anisotropy || 1;
-            return tex;
+            ox.putImageData(img, 0, 0);
+            return canvasTex(out, { data: true });
         }
 
-        function createMarbleSwirlTexture(c1, c2) {
-            const c = document.createElement('canvas'); c.width = 256; c.height = 128;
-            const x = c.getContext('2d');
-            x.fillStyle = 'rgba(255,255,255,0.08)'; x.fillRect(0, 0, 256, 128);
-            x.lineWidth = 14; x.strokeStyle = c1; x.beginPath(); x.moveTo(0, 64); x.bezierCurveTo(64, 10, 128, 118, 256, 64); x.stroke();
-            x.lineWidth = 8; x.strokeStyle = c2; x.beginPath(); x.moveTo(0, 40); x.bezierCurveTo(80, 110, 160, 18, 256, 90); x.stroke();
-            return new THREE.CanvasTexture(c);
+        // พื้นลาน: ภาพสี 1024px + normal map 512px (ก้อนกรวด รอยแตก เม็ดดิน นูนรับแสงจริง)
+        function createGroundTextures(g, seed) {
+            const S = 1024, HS = 512, k = HS / S, rnd = seededRandom(seed);
+            const [c, x] = mkCanvas(S, S), [hc, hx] = mkCanvas(HS, HS);
+            x.fillStyle = g.base; x.fillRect(0, 0, S, S);
+            hx.fillStyle = '#808080'; hx.fillRect(0, 0, HS, HS);
+            const wrap = (px, py, r, fn) => { for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) { const X = px + ox, Y = py + oy; if (X > -r && X < S + r && Y > -r && Y < S + r) fn(X, Y); } };
+            // ด่างสีอ่อนเข้มเป็นหย่อมใหญ่
+            for (let i = 0; i < 46; i++) {
+                const px = rnd() * S, py = rnd() * S, r = 60 + rnd() * 150, dark = rnd() > 0.5, a = (0.10 + rnd() * 0.14).toFixed(2), v = dark ? 96 : 160;
+                wrap(px, py, r, (X, Y) => {
+                    const gr = x.createRadialGradient(X, Y, 0, X, Y, r), col = dark ? g.dark : g.light;
+                    gr.addColorStop(0, col.replace('A', a)); gr.addColorStop(1, col.replace('A', '0'));
+                    x.fillStyle = gr; x.fillRect(X - r, Y - r, 2 * r, 2 * r);
+                    const hg = hx.createRadialGradient(X * k, Y * k, 0, X * k, Y * k, r * k);
+                    hg.addColorStop(0, `rgba(${v},${v},${v},0.3)`); hg.addColorStop(1, `rgba(${v},${v},${v},0)`);
+                    hx.fillStyle = hg; hx.fillRect((X - r) * k, (Y - r) * k, 2 * r * k, 2 * r * k);
+                });
+            }
+            // เม็ดดินละเอียด
+            for (let i = 0, n = g.specks * 2.6; i < n; i++) {
+                const px = rnd() * S, py = rnd() * S, r = rnd() * g.size + 0.4, dark = rnd() > 0.5;
+                x.fillStyle = (dark ? g.dark : g.light).replace('A', (rnd() * 0.35).toFixed(3));
+                x.beginPath(); x.arc(px, py, r, 0, 6.283); x.fill();
+                if (i % 3 === 0) { const v = dark ? 62 : 196; hx.fillStyle = `rgba(${v},${v},${v},0.5)`; hx.beginPath(); hx.arc(px * k, py * k, Math.max(0.6, r * k), 0, 6.283); hx.fill(); }
+            }
+            for (let i = 0; i < 1100; i++) { x.fillStyle = rnd() > 0.4 ? g.grit[0] : g.grit[1]; x.fillRect(rnd() * S, rnd() * S, rnd() * 3 + 1, rnd() * 3 + 1); }
+            // รอยแตกดินแห้ง
+            for (let i = 0; i < g.cracks; i++) {
+                let px = rnd() * S, py = rnd() * S, a = rnd() * 6.283; const pts = [[px, py]];
+                for (let j = 0, m = 6 + rnd() * 10; j < m; j++) { a += (rnd() - 0.5) * 1.3; px += Math.cos(a) * (8 + rnd() * 14); py += Math.sin(a) * (8 + rnd() * 14); pts.push([px, py]); }
+                for (const [ctx, sc, col, lw] of [[x, 1, 'rgba(24,10,3,0.5)', 1.4], [hx, k, 'rgba(10,10,10,0.75)', 1.3]]) {
+                    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath(); pts.forEach(([a1, b1], j) => j ? ctx.lineTo(a1 * sc, b1 * sc) : ctx.moveTo(a1 * sc, b1 * sc)); ctx.stroke();
+                }
+            }
+            if (g.grass) {
+                for (let i = 0; i < 30; i++) {   // ดินโผล่เป็นหย่อม
+                    const px = rnd() * S, py = rnd() * S, r = 30 + rnd() * 70;
+                    wrap(px, py, r, (X, Y) => { const gr = x.createRadialGradient(X, Y, 0, X, Y, r); gr.addColorStop(0, 'rgba(112,86,52,0.5)'); gr.addColorStop(1, 'rgba(112,86,52,0)'); x.fillStyle = gr; x.fillRect(X - r, Y - r, r * 2, r * 2); });
+                }
+                const blades = ['rgba(124,174,62,0.85)', 'rgba(72,124,42,0.85)', 'rgba(164,194,92,0.75)', 'rgba(52,98,34,0.8)'];
+                for (let i = 0; i < 12000; i++) {
+                    const px = rnd() * S, py = rnd() * S, dx = rnd() * 6 - 3, dy = -rnd() * 12 - 4;
+                    x.strokeStyle = blades[i % 4]; x.lineWidth = 1 + rnd(); x.beginPath(); x.moveTo(px, py); x.lineTo(px + dx, py + dy); x.stroke();
+                    if (i % 2 === 0) { const v = 120 + rnd() * 120 | 0; hx.strokeStyle = `rgba(${v},${v},${v},0.7)`; hx.lineWidth = 1; hx.beginPath(); hx.moveTo(px * k, py * k); hx.lineTo((px + dx) * k, (py + dy) * k); hx.stroke(); }
+                }
+            }
+            // ก้อนกรวด (มีเงา + ขอบสว่าง)
+            for (let i = 0; i < g.pebbles; i++) {
+                const px = rnd() * S, py = rnd() * S, r = 2.2 + rnd() * 5.5, rot = rnd() * 3.14, col = g.pebble[i % g.pebble.length], sq = 0.65 + rnd() * 0.3;
+                wrap(px, py, r + 4, (X, Y) => {
+                    x.fillStyle = 'rgba(0,0,0,0.38)'; x.beginPath(); x.ellipse(X + r * 0.4, Y + r * 0.4, r, r * sq, rot, 0, 6.283); x.fill();
+                    x.fillStyle = col; x.beginPath(); x.ellipse(X, Y, r, r * sq, rot, 0, 6.283); x.fill();
+                    x.fillStyle = 'rgba(255,255,255,0.3)'; x.beginPath(); x.ellipse(X - r * 0.25, Y - r * 0.25, r * 0.5, r * sq * 0.45, rot, 0, 6.283); x.fill();
+                    const hg = hx.createRadialGradient(X * k, Y * k, 0, X * k, Y * k, r * k * 1.05); hg.addColorStop(0, 'rgba(255,255,255,0.95)'); hg.addColorStop(0.7, 'rgba(225,225,225,0.8)'); hg.addColorStop(1, 'rgba(128,128,128,0)');
+                    hx.fillStyle = hg; hx.beginPath(); hx.arc(X * k, Y * k, r * k * 1.05, 0, 6.283); hx.fill();
+                });
+            }
+            // ใบไม้แห้งร่วง
+            for (let i = 0; i < g.leaves; i++) {
+                const px = 30 + rnd() * (S - 60), py = 30 + rnd() * (S - 60), len = 12 + rnd() * 10, rot = rnd() * 6.283, col = ['#b98a3a', '#8f6a2c', '#c9a850', '#7a5a2a'][i % 4];
+                x.save(); x.translate(px, py); x.rotate(rot);
+                x.fillStyle = 'rgba(0,0,0,0.3)'; x.beginPath(); x.moveTo(-len / 2 + 2, 2); x.quadraticCurveTo(2, -len * 0.42 + 2, len / 2 + 2, 2); x.quadraticCurveTo(2, len * 0.42 + 2, -len / 2 + 2, 2); x.fill();
+                x.fillStyle = col; x.beginPath(); x.moveTo(-len / 2, 0); x.quadraticCurveTo(0, -len * 0.42, len / 2, 0); x.quadraticCurveTo(0, len * 0.42, -len / 2, 0); x.fill();
+                x.strokeStyle = 'rgba(60,40,15,0.6)'; x.lineWidth = 0.8; x.beginPath(); x.moveTo(-len / 2, 0); x.lineTo(len / 2, 0); x.stroke();
+                x.restore();
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, g.bump) };
         }
+
+        // เปลือกไม้ (โทนเทา ย้อมสีด้วยสีวัสดุ)
+        function texBark() {
+            const [c, x] = mkCanvas(256, 512), [hc, hx] = mkCanvas(256, 512), rnd = seededRandom(77);
+            x.fillStyle = '#c4beb6'; x.fillRect(0, 0, 256, 512); hx.fillStyle = '#7c7c7c'; hx.fillRect(0, 0, 256, 512);
+            for (let i = 0; i < 460; i++) {
+                const px = rnd() * 256, py = rnd() * 512, len = 40 + rnd() * 170, w = 1 + rnd() * 3.6, dark = rnd() > 0.42, sway = (rnd() - 0.5) * 12;
+                const v = dark ? 70 + rnd() * 60 | 0 : 208 + rnd() * 44 | 0;
+                for (const [ctx, col] of [[x, `rgba(${v},${v * 0.95 | 0},${v * 0.9 | 0},0.6)`], [hx, dark ? 'rgba(14,14,14,0.75)' : 'rgba(232,232,232,0.5)']])
+                    for (const ox of [-256, 0, 256]) for (const oy of [0, -512]) {
+                        ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(px + ox, py + oy);
+                        ctx.bezierCurveTo(px + ox + sway, py + oy + len * 0.33, px + ox - sway, py + oy + len * 0.66, px + ox + sway * 0.5, py + oy + len); ctx.stroke();
+                    }
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 3.2) };
+        }
+        // กลุ่มใบไม้ (พื้นโปร่งใส ใช้เป็นแผ่นใบรอบทรงพุ่ม)
+        function texLeaves() {
+            const [c, x] = mkCanvas(256, 256), rnd = seededRandom(31);
+            for (let i = 0; i < 15; i++) {
+                const a = i / 15 * 6.283 + rnd() * 0.5, dist = 14 + rnd() * 50, len = 54 + rnd() * 34, wid = len * (0.2 + rnd() * 0.1), v = 165 + rnd() * 90 | 0;
+                x.save(); x.translate(128 + Math.cos(a) * dist, 128 + Math.sin(a) * dist); x.rotate(a + (rnd() - 0.5) * 0.7);
+                x.fillStyle = `rgb(${v * 0.88 | 0},${v},${v * 0.78 | 0})`;
+                x.beginPath(); x.moveTo(-len * 0.4, 0); x.quadraticCurveTo(0, -wid, len * 0.6, 0); x.quadraticCurveTo(0, wid, -len * 0.4, 0); x.fill();
+                x.strokeStyle = 'rgba(255,255,255,0.4)'; x.lineWidth = 1; x.beginPath(); x.moveTo(-len * 0.4, 0); x.lineTo(len * 0.6, 0); x.stroke();
+                x.restore();
+            }
+            return canvasTex(c, { repeat: false });
+        }
+        // ผิวพุ่มใบไม้: ใบซ้อนทับกันแน่น (ต่อลายได้ไร้รอยต่อ)
+        function texFoliage() {
+            const S = 256, [c, x] = mkCanvas(S, S), [hc, hx] = mkCanvas(S, S), rnd = seededRandom(57);
+            x.fillStyle = '#6f7f68'; x.fillRect(0, 0, S, S); hx.fillStyle = '#303030'; hx.fillRect(0, 0, S, S);
+            for (let i = 0; i < 520; i++) {
+                const px = rnd() * S, py = rnd() * S, len = 26 + rnd() * 20, wid = len * (0.24 + rnd() * 0.1), rot = rnd() * 6.283, v = 168 + rnd() * 87 | 0, hv = 90 + rnd() * 165 | 0;
+                for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) {
+                    if (px + ox < -40 || px + ox > S + 40 || py + oy < -40 || py + oy > S + 40) continue;
+                    for (const [ctx, fill, sh] of [[x, `rgb(${v * 0.88 | 0},${v},${v * 0.76 | 0})`, true], [hx, `rgb(${hv},${hv},${hv})`, false]]) {
+                        ctx.save(); ctx.translate(px + ox, py + oy); ctx.rotate(rot);
+                        if (sh) { ctx.fillStyle = 'rgba(20,35,15,0.45)'; ctx.beginPath(); ctx.moveTo(-len / 2 + 2, 3); ctx.quadraticCurveTo(2, -wid + 3, len / 2 + 2, 3); ctx.quadraticCurveTo(2, wid + 3, -len / 2 + 2, 3); ctx.fill(); }
+                        ctx.fillStyle = fill; ctx.beginPath(); ctx.moveTo(-len / 2, 0); ctx.quadraticCurveTo(0, -wid, len / 2, 0); ctx.quadraticCurveTo(0, wid, -len / 2, 0); ctx.fill();
+                        if (sh) { ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(-len / 2, 0); ctx.lineTo(len / 2, 0); ctx.stroke(); }
+                        ctx.restore();
+                    }
+                }
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 2.2) };
+        }
+        // ไม้กระดาน
+        function texPlanks() {
+            const [c, x] = mkCanvas(256, 256), [hc, hx] = mkCanvas(256, 256), rnd = seededRandom(5);
+            hx.fillStyle = '#9a9a9a'; hx.fillRect(0, 0, 256, 256);
+            for (let r = 0; r < 8; r++) {
+                const y = r * 32, v = 176 + rnd() * 60 | 0;
+                x.fillStyle = `rgb(${v},${v * 0.95 | 0},${v * 0.88 | 0})`; x.fillRect(0, y, 256, 32);
+                for (let i = 0; i < 26; i++) {
+                    const yy = y + 2 + rnd() * 28, a = (0.08 + rnd() * 0.18).toFixed(2);
+                    x.strokeStyle = rnd() > 0.5 ? `rgba(60,45,30,${a})` : `rgba(255,250,240,${a})`; x.lineWidth = 0.6 + rnd();
+                    x.beginPath(); x.moveTo(0, yy); x.bezierCurveTo(80, yy + (rnd() - 0.5) * 5, 170, yy + (rnd() - 0.5) * 5, 256, yy); x.stroke();
+                }
+                const sx = rnd() * 250;
+                x.fillStyle = 'rgba(30,20,12,0.75)'; x.fillRect(0, y, 256, 2); x.fillRect(sx, y, 2, 32);
+                hx.fillStyle = '#1e1e1e'; hx.fillRect(0, y, 256, 3); hx.fillRect(sx, y, 3, 32);
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 2.4) };
+        }
+        // หลังคาจาก / ฟาง
+        function texThatch() {
+            const [c, x] = mkCanvas(256, 256), [hc, hx] = mkCanvas(256, 256), rnd = seededRandom(9);
+            x.fillStyle = '#bcab88'; x.fillRect(0, 0, 256, 256); hx.fillStyle = '#808080'; hx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 2800; i++) {
+                const px = rnd() * 256, py = rnd() * 256 - 20, len = 14 + rnd() * 26, v = 120 + rnd() * 135 | 0, dx = (rnd() - 0.5) * 6;
+                x.strokeStyle = `rgba(${v},${v * 0.92 | 0},${v * 0.7 | 0},0.8)`; x.lineWidth = 1 + rnd(); x.beginPath(); x.moveTo(px, py); x.lineTo(px + dx, py + len); x.stroke();
+                hx.strokeStyle = `rgba(${v},${v},${v},0.8)`; hx.lineWidth = 1.2; hx.beginPath(); hx.moveTo(px, py); hx.lineTo(px + dx, py + len); hx.stroke();
+            }
+            for (let r = 0; r < 4; r++) {
+                const y = r * 64, gr = x.createLinearGradient(0, y, 0, y + 16);
+                gr.addColorStop(0, 'rgba(40,28,12,0.6)'); gr.addColorStop(1, 'rgba(40,28,12,0)'); x.fillStyle = gr; x.fillRect(0, y, 256, 16);
+                hx.fillStyle = 'rgba(0,0,0,0.55)'; hx.fillRect(0, y, 256, 4);
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 2.6) };
+        }
+        // ปูนฉาบ / คอนกรีต (โทนขาว มีคราบน้ำ)
+        function texPlaster() {
+            const [c, x] = mkCanvas(256, 256), [hc, hx] = mkCanvas(256, 256), rnd = seededRandom(13);
+            x.fillStyle = '#f1efe9'; x.fillRect(0, 0, 256, 256); hx.fillStyle = '#808080'; hx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 5200; i++) {
+                const px = rnd() * 256, py = rnd() * 256, r = 0.5 + rnd() * 1.6, dark = rnd() > 0.5;
+                x.fillStyle = dark ? `rgba(120,112,98,${(rnd() * 0.14).toFixed(3)})` : `rgba(255,255,255,${(rnd() * 0.3).toFixed(3)})`; x.beginPath(); x.arc(px, py, r, 0, 6.283); x.fill();
+                const v = dark ? 88 : 172; hx.fillStyle = `rgba(${v},${v},${v},0.45)`; hx.beginPath(); hx.arc(px, py, r, 0, 6.283); hx.fill();
+            }
+            for (let i = 0; i < 16; i++) {
+                const px = rnd() * 256, w = 3 + rnd() * 9, h = 60 + rnd() * 160, gr = x.createLinearGradient(0, 0, 0, h);
+                gr.addColorStop(0, 'rgba(110,100,84,0.16)'); gr.addColorStop(1, 'rgba(110,100,84,0)'); x.fillStyle = gr; x.fillRect(px, 0, w, h);
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 1.2) };
+        }
+        // กระเบื้องหลังคา
+        function texRoof() {
+            const [c, x] = mkCanvas(256, 256), [hc, hx] = mkCanvas(256, 256), rnd = seededRandom(21);
+            for (let r = 0; r < 8; r++) for (let i = -1; i < 9; i++) {
+                const tx = i * 32 + (r % 2 ? 16 : 0), ty = r * 32, v = 188 + rnd() * 56 | 0;
+                x.fillStyle = `rgb(${v},${v * 0.97 | 0},${v * 0.94 | 0})`; x.fillRect(tx, ty, 32, 32);
+                const gr = x.createLinearGradient(0, ty + 20, 0, ty + 32); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,0.42)'); x.fillStyle = gr; x.fillRect(tx, ty + 20, 32, 12);
+                x.fillStyle = 'rgba(0,0,0,0.3)'; x.fillRect(tx, ty, 1.5, 32);
+                const hg = hx.createLinearGradient(0, ty, 0, ty + 32); hg.addColorStop(0, '#404040'); hg.addColorStop(1, '#d8d8d8'); hx.fillStyle = hg; hx.fillRect(tx, ty, 32, 32);
+                hx.fillStyle = '#202020'; hx.fillRect(tx, ty, 2, 32);
+            }
+            return { map: canvasTex(c), normalMap: normalFromHeight(hc, 2.2) };
+        }
+        // ลายโอ่งมังกรราชบุรี (พันรอบตัวโอ่ง)
+        function texDragonJar() {
+            const [c, x] = mkCanvas(512, 256), rnd = seededRandom(88), W = 512;
+            const gr = x.createLinearGradient(0, 0, 0, 256);
+            gr.addColorStop(0, '#2c1608'); gr.addColorStop(0.3, '#5e3013'); gr.addColorStop(0.7, '#4c260f'); gr.addColorStop(1, '#241006');
+            x.fillStyle = gr; x.fillRect(0, 0, W, 256);
+            for (let i = 0; i < 70; i++) { x.fillStyle = `rgba(20,8,2,${(0.1 + rnd() * 0.2).toFixed(2)})`; x.fillRect(rnd() * W, rnd() * 256, 2 + rnd() * 5, 30 + rnd() * 90); }
+            const gold = '#d6a436', gold2 = '#f1d06c', bodyY = (px) => 124 + Math.sin(px / W * Math.PI * 4) * 38;
+            x.fillStyle = gold; x.fillRect(0, 54, W, 4); x.fillRect(0, 196, W, 4);
+            x.strokeStyle = gold; x.lineWidth = 2.5; x.beginPath();
+            for (let px = 0; px <= W; px += 4) { const y = 41 + Math.sin(px / W * Math.PI * 24) * 6; px ? x.lineTo(px, y) : x.moveTo(px, y); } x.stroke();
+            x.beginPath(); for (let px = 0; px <= W; px += 4) { const y = 211 + Math.sin(px / W * Math.PI * 24) * 5; px ? x.lineTo(px, y) : x.moveTo(px, y); } x.stroke();
+            x.lineCap = 'round'; x.lineJoin = 'round';
+            for (const [lw, col] of [[20, gold], [11, gold2]]) { x.strokeStyle = col; x.lineWidth = lw; x.beginPath(); for (let px = -8; px <= W + 8; px += 4) { px === -8 ? x.moveTo(px, bodyY(px)) : x.lineTo(px, bodyY(px)); } x.stroke(); }
+            x.strokeStyle = 'rgba(96,52,10,0.85)'; x.lineWidth = 1.5;
+            for (let px = 5; px < W; px += 9) { x.beginPath(); x.arc(px, bodyY(px), 5.5, -1.2, 1.2); x.stroke(); }      // เกล็ด
+            x.fillStyle = gold;
+            for (let px = 8; px < W; px += 22) { const y = bodyY(px) - 11; x.beginPath(); x.moveTo(px - 5, y); x.lineTo(px, y - 10); x.lineTo(px + 5, y); x.fill(); }   // ครีบหลัง
+            x.strokeStyle = gold; x.lineWidth = 2.5;
+            for (let i = 0; i < 12; i++) {   // ลายเมฆก้นหอย
+                const px = rnd() * W, py = rnd() > 0.5 ? 76 + rnd() * 10 : 172 + rnd() * 12;
+                if (Math.abs(py - bodyY(px)) < 26) continue;
+                for (const ox of [-W, 0, W]) { x.beginPath(); for (let a = 0; a < 9; a += 0.3) { const rr = 1.5 + a * 1.25, X = px + ox + Math.cos(a) * rr, Y = py + Math.sin(a) * rr * 0.75; a ? x.lineTo(X, Y) : x.moveTo(X, Y); } x.stroke(); }
+            }
+            return canvasTex(c);
+        }
+        // วงปีหน้าตัดท่อนไม้
+        function texRings() {
+            const [c, x] = mkCanvas(128, 128), rnd = seededRandom(3);
+            x.fillStyle = '#d9bb8c'; x.fillRect(0, 0, 128, 128);
+            for (let r = 60; r > 3; r -= 3 + rnd() * 3) { x.strokeStyle = `rgba(120,80,40,${(0.25 + rnd() * 0.35).toFixed(2)})`; x.lineWidth = 1 + rnd(); x.beginPath(); x.ellipse(64 + rnd() * 2, 64 + rnd() * 2, r, r * (0.94 + rnd() * 0.08), 0, 0, 6.283); x.stroke(); }
+            x.strokeStyle = 'rgba(70,45,20,0.6)'; x.lineWidth = 1.2; for (let i = 0; i < 4; i++) { const a = rnd() * 6.283; x.beginPath(); x.moveTo(64, 64); x.lineTo(64 + Math.cos(a) * 58, 64 + Math.sin(a) * 58); x.stroke(); }
+            return canvasTex(c, { repeat: false });
+        }
+        // แนวต้นไม้ไกลๆ ที่ขอบฟ้า
+        function texTreeline(palms, seed) {
+            const W = 2048, H = 256, [c, x] = mkCanvas(W, H), rnd = seededRandom(seed);
+            const blob = (px, py, r, col) => { x.fillStyle = col; for (const ox of [-W, 0, W]) { x.beginPath(); x.arc(px + ox, py, r, 0, 6.283); x.fill(); } };
+            x.fillStyle = '#b4b4b4'; x.fillRect(0, H - 34, W, 34);
+            for (let i = 0; i < 230; i++) {   // แนวพุ่มไม้ต่อเนื่อง สูงต่ำไม่เท่ากัน
+                const px = rnd() * W, h = 44 + rnd() * 96 + (rnd() > 0.85 ? 50 : 0), r = 22 + rnd() * 30;
+                x.fillStyle = '#9e9e9e'; for (const ox of [-W, 0, W]) x.fillRect(px + ox - 3, H - h, 6, h);
+                const pts = []; for (let j = 0; j < 7; j++) pts.push([px + (rnd() - 0.5) * r * 1.7, H - h + (rnd() - 0.6) * r, r * (0.45 + rnd() * 0.5)]);
+                pts.forEach(([a, b, rr]) => blob(a, b, rr, '#bdbdbd'));
+                pts.forEach(([a, b, rr]) => blob(a - rr * 0.22, b - rr * 0.3, rr * 0.62, 'rgba(255,255,255,0.3)'));   // ยอดพุ่มรับแสง
+            }
+            if (palms) for (let i = 0; i < 8; i++) {   // ต้นตาล: ลำต้นสูงชะลูด ใบแผ่ห้อยลง
+                const px = rnd() * W, h = 182 + rnd() * 56;
+                for (const ox of [-W, 0, W]) {
+                    x.fillStyle = '#9e9e9e'; x.fillRect(px + ox - 2.5, H - h, 5, h);
+                    x.strokeStyle = '#c4c4c4'; x.lineWidth = 4.5; x.lineCap = 'round';
+                    for (let j = 0; j < 11; j++) { const a = -3.5 + j / 10 * 3.9; x.beginPath(); x.moveTo(px + ox, H - h); x.quadraticCurveTo(px + ox + Math.cos(a) * 20, H - h + Math.sin(a) * 22 - 4, px + ox + Math.cos(a) * 27, H - h + Math.sin(a) * 20 + 9); x.stroke(); }
+                }
+                blob(px, H - h - 2, 11, '#c4c4c4');
+            }
+            const t = canvasTex(c); t.wrapT = THREE.ClampToEdgeWrapping; return t;
+        }
+        function texHills(seed) {
+            const W = 1024, H = 128, [c, x] = mkCanvas(W, H), s = seed * 1.7;
+            x.fillStyle = '#fff'; x.beginPath(); x.moveTo(0, H);
+            for (let px = 0; px <= W; px += 4) { const u = px / W * Math.PI * 2; x.lineTo(px, H * 0.5 - Math.sin(u * 2 + s) * 22 - Math.sin(u * 5 + s * 2) * 12 - Math.sin(u * 11 + s) * 5); }
+            x.lineTo(W, H); x.fill();
+            const t = canvasTex(c); t.wrapT = THREE.ClampToEdgeWrapping; return t;
+        }
+        // เส้นเมือง: รอยขีดดินด้วยไม้ (ร่องเข้ม + เศษดินสองข้าง)
+        function texScratch(groove, crumb, seed) {
+            const [c, x] = mkCanvas(512, 48), rnd = seededRandom(seed);
+            for (let i = 0; i < 900; i++) {
+                const px = rnd() * 512, side = rnd() > 0.5 ? 1 : -1, off = 6 + Math.pow(rnd(), 1.6) * 14;
+                x.fillStyle = crumb.replace('A', (0.4 + rnd() * 0.55).toFixed(2)); x.beginPath(); x.arc(px, 24 + side * off, 0.8 + rnd() * 1.9, 0, 6.283); x.fill();
+            }
+            x.strokeStyle = groove; x.lineCap = 'round';
+            for (let pass = 0; pass < 3; pass++) {
+                x.lineWidth = 9.5 - pass * 2.6; x.globalAlpha = 0.5 + pass * 0.2; x.beginPath();
+                for (let px = -8; px <= 520; px += 8) { const y = 24 + Math.sin(px * 0.049087) * 1.6 + Math.sin(px * 0.12272) * 1.1; px === -8 ? x.moveTo(px, y) : x.lineTo(px, y); }
+                x.stroke();
+            }
+            x.globalAlpha = 1;
+            const t = canvasTex(c); t.wrapT = THREE.ClampToEdgeWrapping; return t;
+        }
+        function texBlob() {
+            const [c, x] = mkCanvas(64, 64), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.5)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+            x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+            return canvasTex(c, { repeat: false });
+        }
+        const TEX = { bark: texBark, leaves: texLeaves, foliage: texFoliage, planks: texPlanks, thatch: texThatch, plaster: texPlaster, roof: texRoof, dragon: texDragonJar, rings: texRings, blob: texBlob };
 
         function createThaiFlagTexture() {
             const c = document.createElement('canvas'); c.width = 300; c.height = 200;
@@ -803,6 +1068,8 @@
         // =====================================================================
         // 3. MAIN GAME
         // =====================================================================
+        const _vN = new THREE.Vector3(), _vUp = new THREE.Vector3(0, 1, 0), _qN = new THREE.Quaternion();
+
         class MarbleGame {
             constructor() {
                 this.canvas = document.getElementById('game-canvas');
@@ -845,6 +1112,8 @@
 
                 this.time = 0; this.accum = 0; this.lastHitSound = 0; this.lastPlanMs = 0;
                 this.colliders = []; this.zones = []; this.particles = []; this.shake = 0; this.fadeables = [];
+                this.aoSpots = []; this.windU = { value: 0 }; this._lib = {}; this._geo = {};
+                this.sunXZ = new THREE.Vector2(1, 0); this.sunTan = 1;
 
                 this.initScene();
                 this.createGround();
@@ -894,31 +1163,97 @@
             // ---------------------------------------------------------------
             initScene() {
                 this.scene = new THREE.Scene();
-                this.camera = new THREE.PerspectiveCamera(this.targetFov, window.innerWidth / window.innerHeight, 0.1, 120);
+                this.camera = new THREE.PerspectiveCamera(this.targetFov, window.innerWidth / window.innerHeight, 0.1, 420);
                 this.cameraDefaultPos = new THREE.Vector3(0, 5.6, 7.6);
                 this.camera.position.copy(this.cameraDefaultPos);
                 this.camera.lookAt(0, 0, -0.5);
 
-                this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+                this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                // ความละเอียด: เริ่มที่ 2 เท่า แล้วปรับเองตามกำลังเครื่อง — ลื่นก็เพิ่มจนคมเต็มจอ (สูงสุด 3 เท่า) หน่วงก็ลด (ดู autoQuality)
+                const dpr = window.devicePixelRatio || 1, top = Math.min(dpr, 3);
+                const levels = [top, 2.5, 2, 1.6, 1.3, 1].filter((v, i) => i === 0 || v < top);
+                let start = Math.max(0, levels.findIndex(v => v <= 2));
+                try { const sv = parseInt(localStorage.getItem('marble.dprIdx'), 10); if (sv >= 0 && sv < levels.length) start = sv; } catch (e) { }
+                this.dyn = { levels, idx: start, best: 0, fast: 0, acc: 0, n: 0, warm: 1.5, locked: false };   // warm = วินาทีที่ยังไม่วัด (ช่วงโหลด)
+                this.renderer.setPixelRatio(levels[start]);
+                // สีและแสงแบบภาพถ่าย: คำนวณแสงในปริภูมิ linear → ACES tone mapping → sRGB
+                this.renderer.outputEncoding = THREE.sRGBEncoding;
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
                 this.renderer.shadowMap.enabled = true;
                 this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                MAX_ANISO = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
 
                 this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
                 this.controls.enableDamping = true; this.controls.dampingFactor = 0.05;
                 this.controls.enabled = false;
                 this.controls.maxPolarAngle = Math.PI * 0.48;
+                this.controls.maxDistance = 60;
 
-                this.ambient = new THREE.AmbientLight(0xffffff, 0.9);
+                // แสงฟ้า/แสงสะท้อนจากพื้น + ดวงอาทิตย์ (เงาคมชัดครอบคลุมทั้งลานเล่น)
+                this.ambient = new THREE.HemisphereLight(0xffffff, 0x886644, 0.2);
                 this.scene.add(this.ambient);
-                this.sun = new THREE.DirectionalLight(0xffffff, 1.3);
+                this.sun = new THREE.DirectionalLight(0xffffff, 2.4);
                 this.sun.castShadow = true;
-                this.sun.shadow.mapSize.set(2048, 2048);
-                Object.assign(this.sun.shadow.camera, { near: 0.5, far: 40, left: -10, right: 10, top: 10, bottom: -10 });
-                this.scene.add(this.sun);
+                const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+                this.sun.shadow.mapSize.set(coarse ? 2048 : 4096, coarse ? 2048 : 4096);
+                Object.assign(this.sun.shadow.camera, { near: 1, far: 80, left: -13, right: 13, top: 13, bottom: -13 });
+                this.sun.shadow.camera.updateProjectionMatrix();
+                this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.025;
+                this.sun.target.position.set(0, 0, -3.5);
+                this.scene.add(this.sun); this.scene.add(this.sun.target);
+
+                this.createSky();
+                this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
                 window.addEventListener('resize', () => this.onWindowResize());
+            }
+
+            // ท้องฟ้าไล่สี + ดวงอาทิตย์ + เมฆลอย (ใช้เป็นแสงสะท้อนบนลูกแก้ว/โอ่ง/เจดีย์ด้วย)
+            createSky() {
+                const C = () => ({ value: new THREE.Color() });
+                this.skyU = { top: C(), hor: C(), grd: C(), sunCol: C(), cloudCol: C(), sunDir: { value: new THREE.Vector3(0, 1, 0) }, glow: { value: 1 }, cloud: { value: 0.4 }, sunScale: { value: 1 }, time: { value: 0 } };
+                this.skyMat = new THREE.ShaderMaterial({
+                    uniforms: this.skyU, side: THREE.BackSide, depthWrite: false,
+                    vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+                    fragmentShader: `
+                        uniform vec3 top; uniform vec3 hor; uniform vec3 grd; uniform vec3 sunCol; uniform vec3 cloudCol; uniform vec3 sunDir;
+                        uniform float glow; uniform float cloud; uniform float sunScale; uniform float time;
+                        varying vec3 vDir;
+                        float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+                        float vnoise(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+                            return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+                        float fbm(vec2 p) { float a = 0.5; float s = 0.0; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; } return s; }
+                        void main() {
+                            vec3 d = normalize(vDir);
+                            float h = d.y;
+                            vec3 col = mix(hor, top, pow(clamp(h, 0.0, 1.0), 0.5));
+                            col = mix(col, grd, 1.0 - smoothstep(-0.3, -0.02, h));
+                            float sd = max(dot(d, sunDir), 0.0);
+                            vec3 sunL = sunCol * (smoothstep(0.9994, 0.9998, sd) * 9.0 + pow(sd, 90.0) * 0.9 * glow + pow(sd, 9.0) * 0.22 * glow);
+                            if (h > 0.0) {
+                                vec2 uv = d.xz / (h + 0.22) * 0.85 + vec2(time * 0.006, time * 0.002);
+                                float n = fbm(uv);
+                                float th = 0.66 - cloud * 0.3;
+                                float c = smoothstep(th, th + 0.22, n) * smoothstep(0.0, 0.14, h);
+                                vec3 cc = mix(cloudCol * 0.72, cloudCol, smoothstep(th, th + 0.45, n)) + sunCol * pow(sd, 6.0) * 0.25;
+                                col = mix(col, cc, c * 0.9);
+                                sunL *= 1.0 - c * 0.7;
+                            }
+                            col += sunL * sunScale;
+                            gl_FragColor = vec4(col, 1.0);
+                            #include <tonemapping_fragment>
+                            #include <encodings_fragment>
+                        }`
+                });
+                this.skyMat.userData.lin = true;
+                this.skyGeo = new THREE.SphereGeometry(1, 40, 20); this.skyGeo._keep = true;
+                this.sky = new THREE.Mesh(this.skyGeo, this.skyMat);
+                this.sky.scale.setScalar(320); this.sky.frustumCulled = false; this.sky.renderOrder = -10;
+                this.scene.add(this.sky);
+                this.envScene = new THREE.Scene();
+                const dome = new THREE.Mesh(this.skyGeo, this.skyMat); dome.scale.setScalar(50); dome.frustumCulled = false;
+                this.envScene.add(dome);
             }
 
             // ตารางความสูงสำหรับฟิสิกส์ (เร็วกว่าคำนวณ sin/cos ทุกเฟรม — บอทจำลองได้หลายร้อยช็อตต่อตา)
@@ -936,52 +1271,147 @@
                 return (g[k] * (1 - tx) + g[k + 1] * tx) * (1 - tz) + (g[k + N] * (1 - tx) + g[k + N + 1] * tx) * tz;
             }
 
+            // พื้นลาน: ตาข่ายละเอียดตรงลานเล่น (ช่องละ ~17 ซม.) แล้วค่อยๆ หยาบออกไปถึงขอบฟ้า
             createGround() {
-                this.groundGeo = new THREE.PlaneGeometry(50, 50, 128, 128);
-                this.groundMesh = new THREE.Mesh(this.groundGeo, new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0.03 }));
-                this.groundMesh.rotation.x = -Math.PI / 2;
+                const N = 220, half = N / 2, INNER = 11, LIN = 0.6, HALF = 90, CZ = -3;
+                const slope = INNER / LIN, cub = (HALF - INNER - slope * (1 - LIN)) / Math.pow(1 - LIN, 3);
+                const f = (t) => { const a = Math.abs(t), sg = t < 0 ? -1 : 1; if (a <= LIN) return sg * slope * a; const u = a - LIN; return sg * (INNER + slope * u + cub * u * u * u); };
+                const V = N + 1, pos = new Float32Array(V * V * 3), uv = new Float32Array(V * V * 2), col = new Float32Array(V * V * 3).fill(1), idx = [];
+                for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
+                    const k = j * V + i, x = f((i - half) / half), z = CZ + f((j - half) / half);
+                    pos[k * 3] = x; pos[k * 3 + 2] = z; uv[k * 2] = x / TILE; uv[k * 2 + 1] = -z / TILE;
+                    if (i < N && j < N) idx.push(k, k + V, k + 1, k + 1, k + V, k + V + 1);
+                }
+                const geo = this.groundGeo = new THREE.BufferGeometry();
+                geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+                geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+                geo.setIndex(idx);
+                this.groundMat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0, vertexColors: true });
+                this.groundMat.userData.lin = true;
+                const H = this.hole;   // เจาะหลุมจริง: ไม่วาดพื้นในวงปากหลุม
+                this.groundMat.onBeforeCompile = (sh) => {
+                    sh.uniforms.uHole = { value: new THREE.Vector3(H.x, H.z, H.r) };
+                    sh.vertexShader = 'varying vec2 vXZ;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+                    sh.fragmentShader = 'varying vec2 vXZ;\nuniform vec3 uHole;\n' + sh.fragmentShader.replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n if (distance(vXZ, uHole.xy) < uHole.z) discard;');
+                };
+                this.groundMesh = new THREE.Mesh(geo, this.groundMat);
                 this.groundMesh.receiveShadow = true;
                 this.scene.add(this.groundMesh);
             }
 
             updateTerrainMesh() {
-                const pos = this.groundGeo.attributes.position;
-                for (let i = 0; i < pos.count; i++) pos.setZ(i, this.getTerrainHeight(pos.getX(i), -pos.getY(i)));
-                pos.needsUpdate = true;
+                const p = this.groundGeo.attributes.position, flat = this.stage === 1;
+                for (let i = 0; i < p.count; i++) {
+                    let h = 0;
+                    if (!flat) {
+                        const x = p.getX(i), z = p.getZ(i), far = Math.max(Math.abs(x), Math.abs(z + 3));
+                        if (far < 46) h = this.getTerrainHeight(x, z) * (far < 30 ? 1 : 1 - (far - 30) / 16);   // ไกลๆ ค่อยๆ ราบ
+                    }
+                    p.setY(i, h);
+                }
+                p.needsUpdate = true;
                 this.groundGeo.computeVertexNormals();
+                this.groundGeo.computeBoundingSphere();
             }
 
+            // ระบายเฉดพื้น: ดินด่างตามธรรมชาติ ทางที่ถูกเหยียบจนแน่น เงาอับใต้โคนสิ่งของ ดินชื้นรอบแอ่งน้ำ
+            paintGround() {
+                const p = this.groundGeo.attributes.position, c = this.groundGeo.attributes.color, H = this.hole;
+                const sm = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+                for (let i = 0; i < p.count; i++) {
+                    const x = p.getX(i), z = p.getZ(i);
+                    let v = 1;
+                    if (Math.abs(x) < 36 && Math.abs(z + 3) < 36) {
+                        v = 0.93 + 0.09 * Math.sin(x * 0.31 + 1.3) * Math.cos(z * 0.27 - 0.6) + 0.05 * Math.sin(x * 1.1 + z * 0.9) + 0.03 * Math.sin(x * 2.9 - z * 2.3);
+                        v *= 1 + 0.08 * Math.exp(-x * x / 5) * sm(-9, -6.5, z) * (1 - sm(2.2, 4, z));
+                        for (const o of this.colliders) {
+                            if (Math.abs(x - o.cx) > o.br + 0.75 || Math.abs(z - o.cz) > o.br + 0.75) continue;
+                            const [qx, qz, inside] = this.closestOn(o, x, z);
+                            const d = inside ? 0 : Math.max(0, Math.hypot(x - qx, z - qz) - o.r);
+                            v *= 0.5 + 0.5 * sm(0, 0.6, d);
+                        }
+                        for (const sp of this.aoSpots) {
+                            const d = Math.hypot(x - sp.x, z - sp.z) - sp.r;
+                            if (d < sp.f) v *= (1 - sp.k) + sp.k * sm(0, sp.f, Math.max(0, d));
+                        }
+                        for (const zn of this.zones) if (zn.kind === 'puddle' || zn.kind === 'mud') {
+                            const d = Math.hypot(x - zn.x, z - zn.z) - zn.r;
+                            if (d < 0.55) v *= 0.66 + 0.34 * sm(0, 0.55, Math.max(0, d));
+                        }
+                        const dh = Math.hypot(x - H.x, z - H.z);
+                        if (dh < 1.6) v = 1 + (v - 1) * sm(0.95, 1.6, dh);   // รอบปากหลุมคงที่ ต่อกับเนินดินขอบหลุมได้เนียน
+                    }
+                    c.setXYZ(i, v, v, v);
+                }
+                c.needsUpdate = true;
+            }
+
+            // หลุมจริง: ผนังดิน + ก้นหลุม + เนินดินปากหลุม (แสงแดดส่องลงไปเป็นเงาโค้งที่ผนัง)
             createHole() {
-                this.holeGroup = new THREE.Group();
-                const disc = new THREE.Mesh(new THREE.CircleGeometry(this.hole.r, 40), new THREE.MeshBasicMaterial({ color: 0x120702 }));
-                disc.rotation.x = -Math.PI / 2; disc.position.y = 0.005;
-                this.holeGroup.add(disc);
-                this.rimMesh = new THREE.Mesh(new THREE.TorusGeometry(this.hole.r + 0.04, 0.06, 12, 40), new THREE.MeshStandardMaterial({ color: 0x542d13, roughness: 0.95 }));
-                this.rimMesh.rotation.x = Math.PI / 2; this.rimMesh.position.y = 0.015;
-                this.holeGroup.add(this.rimMesh);
-                this.scene.add(this.holeGroup);
+                const R = this.hole.r, D = HOLE_VIS_DEPTH, g = this.holeGroup = new THREE.Group(), H = this.hole;
+                this.holeMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, vertexColors: true, side: THREE.BackSide, envMapIntensity: 0.25 });
+                const wall = new THREE.CylinderGeometry(R + 0.004, R * 0.84, D, 44, 5, true), wp = wall.attributes.position, wuv = wall.attributes.uv, wc = [];
+                for (let i = 0; i < wp.count; i++) {
+                    const t = 0.5 - wp.getY(i) / D, v = 0.7 - 0.5 * Math.pow(t, 0.7);
+                    wc.push(v, v * 0.97, v * 0.94);
+                    wuv.setXY(i, wuv.getX(i) * (2 * Math.PI * R / TILE) * 2.2, wuv.getY(i) * D / TILE * 2.2);
+                }
+                wall.setAttribute('color', new THREE.Float32BufferAttribute(wc, 3));
+                const wm = new THREE.Mesh(wall, this.holeMat); wm.position.y = -D / 2; wm.receiveShadow = true; g.add(wm);
+
+                const fl = new THREE.CircleGeometry(R * 0.84, 36); fl.rotateX(-Math.PI / 2);
+                fl.setAttribute('color', new THREE.Float32BufferAttribute(new Array(fl.attributes.position.count * 3).fill(0.2), 3));
+                this.holeFloorMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, vertexColors: true, envMapIntensity: 0.2 });
+                const fm = new THREE.Mesh(fl, this.holeFloorMat); fm.position.y = -D; fm.receiveShadow = true; g.add(fm);
+
+                const prof = [[R - 0.035, -0.14], [R - 0.008, -0.04], [R + 0.025, 0.012], [R + 0.085, 0.03], [R + 0.16, 0.02], [R + 0.26, -0.006]].map(([a, b]) => new THREE.Vector2(a, b));
+                const rim = new THREE.LatheGeometry(new THREE.SplineCurve(prof).getPoints(12), 56), rp = rim.attributes.position, ruv = rim.attributes.uv, rc = [];
+                for (let i = 0; i < rp.count; i++) {
+                    let x = rp.getX(i), y = rp.getY(i), z = rp.getZ(i);
+                    const rad = Math.hypot(x, z), a = Math.atan2(z, x), t = clamp((rad - (R - 0.035)) / 0.295, 0, 1), jit = 1 - t;
+                    const k = 1 + (0.016 * Math.sin(a * 5 + 1) + 0.01 * Math.sin(a * 11)) * jit;
+                    x *= k; z *= k; y += 0.006 * Math.sin(a * 7) * jit * t * 4;
+                    rp.setXYZ(i, x, y, z);
+                    ruv.setXY(i, (x + H.x) / TILE, -(z + H.z) / TILE);
+                    const v = 0.5 + 0.5 * Math.pow(t, 0.6); rc.push(v, v, v);
+                }
+                rim.setAttribute('color', new THREE.Float32BufferAttribute(rc, 3));
+                rim.computeVertexNormals();
+                this.rimMat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0, vertexColors: true, side: THREE.DoubleSide });
+                const rm = new THREE.Mesh(rim, this.rimMat); rm.receiveShadow = true; g.add(rm);
+
+                // แผ่นบังแสงที่มองไม่เห็น: ทำหน้าที่เป็น "พื้นดินรอบปากหลุม" ให้เงาตกลงไปในหลุม
+                const occGeo = new THREE.RingGeometry(R - 0.01, 0.78, 44); occGeo.rotateX(-Math.PI / 2);
+                const occ = new THREE.Mesh(occGeo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
+                occ.position.y = -0.03; occ.castShadow = true; g.add(occ);
+                [this.holeMat, this.holeFloorMat, this.rimMat].forEach(m => { m.userData.lin = true; });
+                this.scene.add(g);
             }
 
-            buildLine() {   // เส้นเมือง
+            buildLine() {   // เส้นเมือง: รอยขีดบนดิน
                 if (this.lineMesh) { this.scene.remove(this.lineMesh); this.disposeObject(this.lineMesh); }
-                const N = 48, half = 3.2, w = 0.035, pos = [], idx = [];
+                const N = 72, half = 3.4, w = 0.135, pos = [], uvs = [], idx = [], L = THEMES[this.themeKey].line;
                 for (let i = 0; i <= N; i++) {
                     const x = -half + (2 * half * i) / N;
-                    pos.push(x, this.getTerrainHeight(x, CFG.LINE_Z - w) + 0.015, CFG.LINE_Z - w);
-                    pos.push(x, this.getTerrainHeight(x, CFG.LINE_Z + w) + 0.015, CFG.LINE_Z + w);
+                    pos.push(x, this.getTerrainHeight(x, CFG.LINE_Z - w) + 0.012, CFG.LINE_Z - w, x, this.getTerrainHeight(x, CFG.LINE_Z + w) + 0.012, CFG.LINE_Z + w);
+                    uvs.push(i / N * 4, 0, i / N * 4, 1);
                     if (i < N) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
                 }
                 const geo = new THREE.BufferGeometry();
                 geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-                geo.setIndex(idx);
-                this.lineMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xfff6e0, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
+                geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+                geo.setIndex(idx); geo.computeVertexNormals();
+                this.lineMesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: texScratch(L.groove, L.crumb, 7), transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+                this.lineMesh.receiveShadow = true;
+                this.fixColors(this.lineMesh);
                 this.scene.add(this.lineMesh);
             }
 
             createAimArrow() {
                 this.arrowGroup = new THREE.Group();
-                this.arrowShaftMat = new THREE.MeshBasicMaterial({ color: 0xffbb00, transparent: true, opacity: 0.85 });
-                this.arrowHeadMat = new THREE.MeshBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.9 });
+                this.arrowShaftMat = new THREE.MeshBasicMaterial({ color: 0xffbb00, transparent: true, opacity: 0.85, toneMapped: false });
+                this.arrowHeadMat = new THREE.MeshBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.9, toneMapped: false });
                 this.arrowShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.8, 8), this.arrowShaftMat);
                 this.arrowShaft.rotation.x = Math.PI / 2; this.arrowShaft.position.z = 0.9;
                 this.arrowGroup.add(this.arrowShaft);
@@ -990,10 +1420,11 @@
                 this.arrowGroup.add(this.arrowHead);
                 // เส้นไกด์ประให้เห็นแนวเล็ง
                 const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0.3), new THREE.Vector3(0, 0, 4.5)]);
-                this.guideLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.18, gapSize: 0.14, transparent: true, opacity: 0.55 }));
+                this.guideLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.18, gapSize: 0.14, transparent: true, opacity: 0.6, toneMapped: false }));
                 this.guideLine.computeLineDistances();
                 this.arrowGroup.add(this.guideLine);
                 this.arrowGroup.visible = false;
+                this.fixColors(this.arrowGroup);
                 this.scene.add(this.arrowGroup);
             }
 
@@ -1002,7 +1433,6 @@
                 this.buildHeightGrid();
                 this.updateTerrainMesh();
                 this.holeGroup.position.set(this.hole.x, this.hole.base, this.hole.z);
-                this.buildLine();
                 this.buildTheme();
             }
 
@@ -1011,10 +1441,40 @@
             // ---------------------------------------------------------------
             disposeObject(obj) {
                 obj.traverse(o => {
-                    if (o.geometry) o.geometry.dispose();
-                    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+                    if (o.geometry && !o.geometry._keep) o.geometry.dispose();
+                    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+                        for (const k of ['map', 'normalMap', 'alphaMap']) if (m[k] && !m[k]._keep) m[k].dispose();
+                        m.dispose();
+                    });
                 });
             }
+
+            // สีวัสดุทั้งหมดเขียนเป็น sRGB → แปลงเป็น linear ครั้งเดียวต่อวัสดุ (แสงเงาถูกต้องตามจริง)
+            fixColors(root, envI) {
+                root.traverse(o => {
+                    if (!o.material) return;
+                    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+                        if (m.userData.lin) return;
+                        m.userData.lin = true;
+                        if (m.color) m.color.convertSRGBToLinear();
+                        if (m.emissive) m.emissive.convertSRGBToLinear();
+                        if (m.map) m.map.encoding = THREE.sRGBEncoding;
+                        if (envI !== undefined && m.envMapIntensity !== undefined) m.envMapIntensity *= envI;
+                    });
+                });
+            }
+
+            // คลังพื้นผิว/รูปทรงที่ใช้ซ้ำ (สร้างครั้งเดียว ไม่ถูกลบตอนเปลี่ยนธีม)
+            lib(name) {
+                if (!this._lib[name]) {
+                    const t = TEX[name]();
+                    (t.isTexture ? [t] : Object.values(t)).forEach(q => { q._keep = true; });
+                    this._lib[name] = t;
+                }
+                return this._lib[name];
+            }
+            keepGeo(key, make) { if (!this._geo[key]) { const g = make(); g._keep = true; this._geo[key] = g; } return this._geo[key]; }
+            scaleUV(geo, su, sv) { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv); return geo; }
 
             gy(x, z) { return this.getTerrainHeight(x, z); }
 
@@ -1022,197 +1482,337 @@
                 if (this.themeGroup) { this.scene.remove(this.themeGroup); this.disposeObject(this.themeGroup); }
                 this.themeGroup = new THREE.Group();
                 this.scene.add(this.themeGroup);
-                this.animated = [];
+                this.animated = []; this.aoSpots = [];
 
-                const T = THEMES[this.themeKey];
-                this.scene.background = new THREE.Color(T.sky);
-                this.scene.fog = new THREE.FogExp2(T.fog, T.fogDensity);
-                this.ambient.color.setHex(T.ambient[0]); this.ambient.intensity = T.ambient[1];
-                this.sun.color.setHex(T.sun[0]); this.sun.intensity = T.sun[1]; this.sun.position.set(...T.sunPos);
+                const T = THEMES[this.themeKey], S = T.sky, U = this.skyU;
+                const L = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+                // ท้องฟ้า + หมอกสีเดียวกับขอบฟ้า (พื้นกลืนกับฟ้าไร้รอยต่อ)
+                U.top.value.copy(L(S.top)); U.hor.value.copy(L(S.hor)); U.grd.value.copy(L(S.grd)); U.sunCol.value.copy(L(S.sun)); U.cloudCol.value.copy(L(S.cloudCol));
+                U.glow.value = S.glow; U.cloud.value = S.cloud;
+                const sd = new THREE.Vector3(...T.sunPos).normalize();
+                U.sunDir.value.copy(sd);
+                this.scene.background = null;
+                this.scene.fog = new THREE.FogExp2(0xffffff, T.fogDensity); this.scene.fog.color.copy(L(S.hor));
+                this.renderer.toneMappingExposure = T.exposure;
+                // แสง
+                this.ambient.color.copy(L(T.hemi[0])); this.ambient.groundColor.copy(L(T.hemi[1])); this.ambient.intensity = T.hemi[2];
+                this.sun.color.copy(L(T.sun[0])); this.sun.intensity = T.sun[1];
+                this.sun.position.copy(sd).multiplyScalar(40).add(this.sun.target.position);
+                this.sunXZ.set(sd.x, sd.z).normalize(); this.sunTan = sd.y / Math.hypot(sd.x, sd.z);
+                // แสงสะท้อนจากท้องฟ้า (IBL): ลดดวงอาทิตย์ลงตอนอบ เพราะมีไฟดวงอาทิตย์จริงอยู่แล้ว
+                U.sunScale.value = 0.12;
+                const env = this.pmrem.fromScene(this.envScene, 0.03);
+                U.sunScale.value = 1;
+                if (this.envRT) this.envRT.dispose();
+                this.envRT = env; this.scene.environment = env.texture;
+
                 audio.setAmbience(this.themeKey);
-                const mat = this.groundMesh.material;
-                if (mat.map) mat.map.dispose();
-                mat.map = createGroundTexture(T.ground, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
-                mat.needsUpdate = true;
-                this.rimMesh.material.color.setHex(T.rim);
+                // พื้น
+                const G = createGroundTextures(T.ground, this.themeKey.length * 131 + 7);
+                G.map._keep = G.normalMap._keep = true;
+                for (const m of [this.groundMat, this.rimMat, this.holeMat, this.holeFloorMat]) {
+                    if (m === this.groundMat) { if (m.map) m.map.dispose(); if (m.normalMap) m.normalMap.dispose(); }
+                    m.map = G.map; m.envMapIntensity = (m === this.groundMat || m === this.rimMat ? 1 : 0.25) * T.env; m.needsUpdate = true;
+                }
+                this.groundMat.normalMap = this.rimMat.normalMap = G.normalMap;
+                this.groundMat.normalScale.set(1, 1); this.rimMat.normalScale.set(1, 1);
 
+                this.buildLine();
+                this.buildBackdrop(this.themeGroup, T);
                 this['build_' + this.themeKey](this.themeGroup);
                 this.buildObstacles(this.themeGroup);
+                this.fixColors(this.themeGroup, T.env);
+                this.paintGround();
+                if (this.dyn) { this.dyn.warm = 1.0; this.dyn.acc = 0; this.dyn.n = 0; }
+            }
+
+            // ฉากไกล: แนวต้นไม้ + เนินเขาจางๆ ในหมอก ให้ภาพมีความลึก
+            buildBackdrop(g, T) {
+                const ring = (tex, R, Hh, rep, col, y) => {
+                    tex.repeat.set(rep, 1);
+                    const m = new THREE.Mesh(new THREE.CylinderGeometry(R, R, Hh, 72, 1, true), new THREE.MeshBasicMaterial({ map: tex, color: col, transparent: true, alphaTest: 0.5, side: THREE.BackSide, fog: false }));
+                    m.position.set(0, Hh / 2 + y, -3); m.userData.noShadow = true; g.add(m);
+                };
+                // สีจางเข้าหาสีขอบฟ้าตามระยะ (atmospheric perspective) — กำหนดสีสำเร็จไว้ในธีม
+                ring(texHills(this.themeKey.length), 96, 12, 2, T.backdrop[1], -1.5);
+                ring(texTreeline(T.palms, this.themeKey.length * 17), 62, 8.5, 5, T.backdrop[0], -1.0);
             }
 
             mesh(geo, color, opts = {}) {
                 return new THREE.Mesh(geo, new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.85 }, opts)));
             }
 
+            shadowed(o) { o.traverse(c => { if (c.isMesh && !c.userData.noShadow) { c.castShadow = true; c.receiveShadow = !c.userData.castOnly; } }); return o; }
+
             // --- ลานดินชนบท ---
             build_rural(g) {
-                // กระท่อม
-                const hut = new THREE.Group();
-                const wood = 0x5c3316;
-                for (const x of [-1.8, 1.8]) for (const z of [-1.5, 1.5]) {
-                    const post = this.mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.5, 8), wood); post.position.set(x, 0.75, z); hut.add(post);
-                }
-                const floor = this.mesh(new THREE.BoxGeometry(4.2, 0.2, 3.4), wood); floor.position.y = 1.5; hut.add(floor);
-                const wall = this.mesh(new THREE.BoxGeometry(3.6, 1.8, 2.8), wood); wall.position.y = 2.4; hut.add(wall);
-                const roof = this.mesh(new THREE.ConeGeometry(3.2, 1.8, 4), 0x9e6c33, { roughness: 0.9 }); roof.position.y = 4.0; roof.rotation.y = Math.PI / 4; hut.add(roof);
-                hut.position.set(0, this.gy(0, -18), -18);
-                g.add(hut);
+                const P = this.lib('planks'), TH = this.lib('thatch'), B = this.lib('bark');
+                const wood = (col) => new THREE.MeshStandardMaterial({ color: col, map: P.map, normalMap: P.normalMap, roughness: 0.9 });
+                const thatch = (col) => new THREE.MeshStandardMaterial({ color: col, map: TH.map, normalMap: TH.normalMap, roughness: 1, side: THREE.DoubleSide });
+                const V2 = (arr) => arr.map(([a, b]) => new THREE.Vector2(a, b));
+
+                // บ้านไม้ยกพื้น หลังคาจั่วมุงจาก มีบันไดพาด
+                const hut = new THREE.Group(), wm = wood(0xa97a4e), dk = wood(0x73492a);
+                for (const x of [-2.0, 0, 2.0]) for (const z of [-1.5, 1.5]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 3.7, 10), dk); post.position.set(x, 1.85, z); hut.add(post); }
+                const floor = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(4.9, 0.16, 3.9), 2.4, 1.6), dk); floor.position.y = 1.6; hut.add(floor);
+                const wall = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(4.2, 2.0, 3.0), 2.2, 1.4), wm); wall.position.y = 2.68; hut.add(wall);
+                const opening = (w, h, x, y) => {
+                    const fr = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, h + 0.18, 0.05), dk); fr.position.set(x, y, 1.51); hut.add(fr);
+                    const m = this.mesh(new THREE.BoxGeometry(w, h, 0.06), 0x150d06, { roughness: 1 }); m.position.set(x, y, 1.52); hut.add(m);
+                };
+                opening(0.85, 1.55, -1.1, 2.46); opening(0.95, 0.8, 0.95, 2.95);
+                const rm = thatch(0xd2bd8c);
+                for (const sg of [-1, 1]) { const rf = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(5.7, 0.14, 2.8), 3, 1.5), rm); rf.position.set(0, 4.44, sg * 1.03); rf.rotation.x = sg * 0.72; hut.add(rf); }
+                const tri = new THREE.Shape(); tri.moveTo(-1.5, 0); tri.lineTo(1.5, 0); tri.lineTo(0, 1.62); tri.closePath();
+                for (const x of [-2.1, 2.05]) { const gb = new THREE.Mesh(new THREE.ExtrudeGeometry(tri, { depth: 0.05, bevelEnabled: false }), wm); gb.rotation.y = Math.PI / 2; gb.position.set(x, 3.68, 0); hut.add(gb); }
+                const lad = new THREE.Group();
+                for (const x of [-0.35, 0.35]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 2.1, 0.07), dk); rail.position.x = x; lad.add(rail); }
+                for (let i = 0; i < 5; i++) { const rung = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.08), dk); rung.position.y = -0.8 + i * 0.4; lad.add(rung); }
+                lad.position.set(-1.1, 0.82, 2.35); lad.rotation.x = -0.5; hut.add(lad);
+                hut.position.set(0, this.gy(0, -18), -18); g.add(this.shadowed(hut));
+                this.aoSpots.push({ x: 0, z: -18, r: 2.0, f: 1.6, k: 0.45 });
 
                 // รั้วไม้ไผ่
+                const bm = new THREE.MeshStandardMaterial({ color: 0xb59a5a, roughness: 0.55 });
                 const fence = (x, z, rotY) => {
                     const f = new THREE.Group();
-                    for (const y of [0.35, 0.8]) { const r = this.mesh(new THREE.CylinderGeometry(0.05, 0.05, 12, 8), 0x8a703a, { roughness: 0.6 }); r.rotation.z = Math.PI / 2; r.position.y = y; f.add(r); }
-                    for (let px = -5.5; px <= 5.5; px += 1.2) { const p = this.mesh(new THREE.CylinderGeometry(0.06, 0.07, 1.2, 8), 0x8a703a, { roughness: 0.6 }); p.position.set(px, 0.6, 0); f.add(p); }
-                    f.position.set(x, this.gy(x, z), z); f.rotation.y = rotY; g.add(f);
+                    for (const y of [0.35, 0.8]) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 12, 8), bm); r.rotation.z = Math.PI / 2; r.position.y = y; f.add(r); }
+                    for (let px = -5.5; px <= 5.5; px += 1.1) { const pst = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 1.25, 8), bm); pst.position.set(px, 0.62, 0); pst.rotation.z = Math.sin(px * 7) * 0.05; f.add(pst); }
+                    f.position.set(x, this.gy(x, z), z); f.rotation.y = rotY; g.add(this.shadowed(f));
                 };
-                fence(-22, 0, Math.PI / 2); fence(22, 0, Math.PI / 2); fence(0, -22, 0);
+                fence(-22, 0, Math.PI / 2); fence(22, 0, Math.PI / 2); fence(-10, -23, 0); fence(10, -23, 0);
 
-                // ต้นกล้วย
-                const leafMat = new THREE.MeshStandardMaterial({ color: 0x2e7d1e, roughness: 0.5, side: THREE.DoubleSide });
-                const banana = (x, z) => {
-                    const t = new THREE.Group();
-                    const trunk = this.mesh(new THREE.CylinderGeometry(0.18, 0.25, 2.8, 8), 0x5c4a28); trunk.position.y = 1.4; t.add(trunk);
-                    for (let i = 0; i < 6; i++) { const l = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 2.2, 2, 4), leafMat); l.position.y = 2.6; l.rotation.set(Math.PI / 3.5, (i * Math.PI) / 3, 0, 'YXZ'); t.add(l); }
-                    t.position.set(x, this.gy(x, z), z); g.add(t);
-                };
-                [[-18, -14], [18, -14], [-18, 10], [18, 10], [-11, -17]].forEach(([x, z]) => banana(x, z));
-
-                // โอ่งน้ำ
-                [[-4, -15.5, 1], [-5, -14.6, 0.8], [4.6, -15.8, 1.1]].forEach(([x, z, s]) => {
-                    const jar = this.mesh(new THREE.SphereGeometry(0.55 * s, 16, 12), 0x6e3b1b, { roughness: 0.7 });
-                    jar.scale.y = 1.15; jar.position.set(x, this.gy(x, z) + 0.55 * s, z); g.add(jar);
-                    const neck = this.mesh(new THREE.CylinderGeometry(0.3 * s, 0.38 * s, 0.25 * s, 16), 0x5a2f15); neck.position.set(x, this.gy(x, z) + 1.18 * s, z); g.add(neck);
+                // ต้นกล้วย: ใบโค้งห้อย มีเส้นกลางใบ
+                const leafGeo = this.keepGeo('bananaLeaf', () => {
+                    const q = new THREE.PlaneGeometry(0.8, 2.5, 4, 8); q.translate(0, 1.25, 0);
+                    const pp = q.attributes.position, col = [];
+                    for (let i = 0; i < pp.count; i++) {
+                        const x = pp.getX(i), y = pp.getY(i), t = y / 2.5, taper = Math.sin(Math.min(1, t * 1.15 + 0.08) * Math.PI) * 0.9 + 0.1;
+                        pp.setXYZ(i, x * taper, y * (1 - 0.22 * t * t), -t * t * 1.15 - Math.abs(x) * 0.28);
+                        const sh = 0.72 + 0.28 * (1 - Math.min(1, Math.abs(x) * 9)) + 0.15 * t; col.push(sh * 0.95, sh, sh * 0.8);
+                    }
+                    q.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); q.computeVertexNormals(); return q;
                 });
+                const leafMat = new THREE.MeshStandardMaterial({ color: 0x4f9a2e, roughness: 0.55, side: THREE.DoubleSide, vertexColors: true });
+                const stemMat = new THREE.MeshStandardMaterial({ color: 0x8a9a52, roughness: 0.8 });
+                const banana = (x, z, sc) => {
+                    const t = new THREE.Group();
+                    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.24, 2.6, 10), stemMat); stem.position.y = 1.3; t.add(stem);
+                    for (let i = 0; i < 7; i++) { const l = new THREE.Mesh(leafGeo, leafMat); l.position.y = 2.5; l.rotation.set(-0.55 - (i % 3) * 0.22, i * 0.9 + x, 0, 'YXZ'); l.scale.setScalar(0.85 + (i % 3) * 0.12); t.add(l); }
+                    t.scale.setScalar(sc); t.position.set(x, this.gy(x, z), z); g.add(this.shadowed(t));
+                    this.aoSpots.push({ x, z, r: 0.25, f: 1.6, k: 0.35 });
+                };
+                [[-17, -14, 1.1], [17.5, -14, 1], [-18, 9, 1.05], [18, 9, 0.95], [-12, -17.5, 1.15], [-15.5, -15.5, 0.85], [7, -19, 1]].forEach(([x, z, sc]) => banana(x, z, sc));
+
+                // โอ่งน้ำข้างบ้าน
+                const jm = new THREE.MeshStandardMaterial({ color: 0x7a4424, roughness: 0.3, metalness: 0.05, side: THREE.DoubleSide, envMapIntensity: 1.1 });
+                [[-4, -15.5, 0.55], [-5, -14.7, 0.44], [4.6, -15.8, 0.6]].forEach(([x, z, r]) => {
+                    const j = new THREE.Mesh(this.jarGeo(), jm); j.scale.setScalar(r); j.position.set(x, this.gy(x, z), z); g.add(this.shadowed(j));
+                    this.aoSpots.push({ x, z, r: r * 0.8, f: 0.6, k: 0.5 });
+                });
+
+                // ต้นตาล
+                const fanGeo = this.keepGeo('palmFan', () => {
+                    const c = new THREE.CircleGeometry(0.9, 9, Math.PI / 2 - 2.0, 4.0), pp = c.attributes.position;
+                    for (let i = 1; i < pp.count; i++) pp.setZ(i, i % 2 ? 0.08 : -0.08);
+                    c.translate(0, 0.7, 0); c.computeVertexNormals(); return c;
+                });
+                const palm = (x, z, h) => {
+                    const t = new THREE.Group();
+                    const tr = new THREE.Mesh(this.scaleUV(new THREE.CylinderGeometry(0.17, 0.27, h, 10, 1, true), 1, h / 2), new THREE.MeshStandardMaterial({ color: 0x8a7660, map: B.map, normalMap: B.normalMap, roughness: 1 })); tr.position.y = h / 2; t.add(tr);
+                    const fm = new THREE.MeshStandardMaterial({ color: 0x47742f, roughness: 0.8, side: THREE.DoubleSide });
+                    for (let i = 0; i < 13; i++) { const fan = new THREE.Mesh(fanGeo, fm); fan.position.y = h; fan.rotation.set(0.3 + (i % 4) * 0.44, i * 1.9, 0, 'YXZ'); t.add(fan); }
+                    t.position.set(x, this.gy(x, z), z); g.add(this.shadowed(t)); this.aoSpots.push({ x, z, r: 0.2, f: 1.2, k: 0.35 });
+                };
+                palm(-8.5, -21, 9); palm(12.5, -20, 10.5); palm(15, -21.5, 8.2);
+
+                // ลอมฟาง
+                const hs = new THREE.Mesh(this.scaleUV(new THREE.LatheGeometry(V2([[0.001, 2.9], [0.5, 2.6], [1.25, 1.7], [1.65, 0.9], [1.6, 0.25], [1.35, 0]]), 20), 4, 2), thatch(0xdcc47c));
+                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 3.9, 6), dk); pole.position.y = 1.95;
+                const hg = new THREE.Group(); hg.add(hs); hg.add(pole); hg.position.set(-9.5, this.gy(-9.5, -16.5), -16.5); g.add(this.shadowed(hg));
+                this.aoSpots.push({ x: -9.5, z: -16.5, r: 1.4, f: 1.0, k: 0.5 });
             }
 
             // --- ลานวัด ---
             build_temple(g) {
-                const white = 0xf3efe4;
-                const goldOpts = { metalness: 0.8, roughness: 0.28, emissive: 0x2a1a00 };
-                const gold = 0xd8a628;
-                // เจดีย์ทอง
-                const st = new THREE.Group();
-                const add = (geo, col, y, opts) => { const m = this.mesh(geo, col, opts); m.position.y = y; st.add(m); return m; };
-                add(new THREE.BoxGeometry(7, 0.8, 7), white, 0.4);
-                add(new THREE.BoxGeometry(5.4, 0.7, 5.4), white, 1.15);
-                add(new THREE.CylinderGeometry(2.0, 2.3, 0.6, 32), gold, 1.8, goldOpts);
-                const bell = add(new THREE.SphereGeometry(1.9, 32, 20), gold, 3.3, goldOpts); bell.scale.y = 1.15;
-                add(new THREE.BoxGeometry(1.6, 0.5, 1.6), gold, 5.45, goldOpts);
-                for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.62 - i * 0.07, 0.08, 8, 24), gold, 5.9 + i * 0.32, goldOpts).rotation.x = Math.PI / 2;
-                add(new THREE.ConeGeometry(0.42, 3.4, 20), gold, 9.4, goldOpts);
-                add(new THREE.SphereGeometry(0.16, 12, 8), gold, 11.15, goldOpts);
-                st.position.set(0, this.gy(0, -21), -21);
-                g.add(st);
+                const PL = this.lib('plaster'), RF = this.lib('roof');
+                const plaster = (col, rough) => new THREE.MeshStandardMaterial({ color: col, map: PL.map, normalMap: PL.normalMap, roughness: rough || 0.9 });
+                const goldM = () => new THREE.MeshStandardMaterial({ color: 0xe2ad30, metalness: 1.0, roughness: 0.3, side: THREE.DoubleSide, envMapIntensity: 1.25 });
+                const V2 = (arr) => arr.map(([a, b]) => new THREE.Vector2(a, b));
 
-                // ต้นโพธิ์ (มีผ้าแพรผูก)
-                const bodhi = (x, z, s) => {
-                    const t = new THREE.Group();
-                    const trunk = this.mesh(new THREE.CylinderGeometry(0.45 * s, 0.8 * s, 4 * s, 10), 0x5a4632); trunk.position.y = 2 * s; t.add(trunk);
-                    const rnd = seededRandom(Math.floor(x * 31 + z * 7));
-                    for (let i = 0; i < 8; i++) {
-                        const c = this.mesh(new THREE.SphereGeometry((1.5 + rnd() * 0.8) * s, 14, 10), i % 2 ? 0x3e7a2c : 0x4f8f35, { roughness: 0.9 });
-                        c.position.set((rnd() - 0.5) * 4.4 * s, (4.2 + rnd() * 1.8) * s, (rnd() - 0.5) * 4.4 * s); t.add(c);
-                    }
-                    const sash = this.mesh(new THREE.TorusGeometry(0.66 * s, 0.07, 8, 24), 0xff8c1a); sash.rotation.x = Math.PI / 2; sash.position.y = 1.3 * s; t.add(sash);
-                    t.position.set(x, this.gy(x, z), z); g.add(t);
+                // เจดีย์ทองทรงระฆัง (ฐานปูนขาว บัวถลา องค์ระฆัง บัลลังก์ ปล้องไฉน ปลียอด)
+                const chedi = (bellPts, seg, ringSeg) => {
+                    const st = new THREE.Group(), gm = goldM(), wm = plaster(0xf4f1e8);
+                    const box = (w, h, y) => { const b = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(w, h, w), w / 2, 1), wm); b.position.y = y; st.add(b); };
+                    box(7.4, 0.8, 0.4); box(5.9, 0.7, 1.15);
+                    st.add(new THREE.Mesh(new THREE.LatheGeometry(new THREE.SplineCurve(V2([[2.6, 1.5], [2.6, 1.66], [2.38, 1.76], [2.42, 1.92], [2.2, 2.02], [2.24, 2.18], [2.02, 2.3], [2.04, 2.6], [1.98, 3.3], [1.72, 4.0], [1.26, 4.6], [0.88, 4.92], [0.84, 5.05]])).getPoints(bellPts), seg), gm));
+                    const har = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 1.5), gm); har.position.y = 5.3; st.add(har);
+                    const sp = []; let y = 5.55;
+                    for (let i = 0; i < 11; i++) { const r = 0.64 - i * 0.047; sp.push([r - 0.07, y], [r, y + 0.05], [r, y + 0.13], [r - 0.07, y + 0.18]); y += 0.2; }
+                    sp.push([0.1, y + 0.05], [0.16, y + 0.5], [0.07, y + 2.6], [0.001, y + 3.0]);
+                    st.add(new THREE.Mesh(new THREE.LatheGeometry(V2(sp), ringSeg), gm));
+                    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 10), gm); ball.position.y = y + 1.4; st.add(ball);
+                    return st;
                 };
-                bodhi(-13, -13, 1); bodhi(15, -9, 0.8);
+                const main = chedi(56, 48, 24);
+                for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const mini = chedi(22, 16, 10); mini.scale.setScalar(0.2); mini.position.set(sx * 3.2, 0.8, sz * 3.2); main.add(mini); }
+                main.position.set(0, this.gy(0, -21), -21); g.add(this.shadowed(main));
+                this.aoSpots.push({ x: 0, z: -21, r: 4.0, f: 1.2, k: 0.4 });
+
+                // โบสถ์: ผนังปูนขาว หลังคาซ้อนชั้นกระเบื้องส้มแดง หน้าบันทอง
+                const ub = new THREE.Group(), wm2 = plaster(0xf6f2ea), roofM = new THREE.MeshStandardMaterial({ color: 0xc4532e, map: RF.map, normalMap: RF.normalMap, roughness: 0.7 }), gm2 = goldM();
+                const basement = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(7.4, 0.5, 11.6), 3, 1), wm2); basement.position.y = 0.25; ub.add(basement);
+                const body = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(6, 3.6, 10), 3, 1.8), wm2); body.position.y = 2.3; ub.add(body);
+                const gable = (w, h, len, y) => {
+                    const s2 = new THREE.Shape(); s2.moveTo(-w / 2, 0); s2.lineTo(w / 2, 0); s2.lineTo(0, h); s2.closePath();
+                    const geo = new THREE.ExtrudeGeometry(s2, { depth: len, bevelEnabled: false }); geo.translate(0, 0, -len / 2); this.scaleUV(geo, 0.8, 0.8);
+                    const m = new THREE.Mesh(geo, roofM); m.position.y = y; ub.add(m);
+                };
+                gable(7.8, 2.3, 10.9, 4.1); gable(5.7, 2.0, 8.4, 5.35);
+                const ped = new THREE.Shape(); ped.moveTo(-3.4, 0); ped.lineTo(3.4, 0); ped.lineTo(0, 2.0); ped.closePath();
+                const pm = new THREE.Mesh(new THREE.ShapeGeometry(ped), gm2); pm.position.set(0, 4.2, 5.47); ub.add(pm);
+                for (const x of [-2.6, -0.9, 0.9, 2.6]) { const col = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 3.6, 12), wm2); col.position.set(x, 2.3, 5.45); ub.add(col); }
+                const door = this.mesh(new THREE.BoxGeometry(1.3, 2.5, 0.08), 0x7a1f14, { roughness: 0.5 }); door.position.set(0, 1.75, 5.03); ub.add(door);
+                const dfr = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.8, 0.05), gm2); dfr.position.set(0, 1.8, 5.02); ub.add(dfr);
+                const chofa = new THREE.Mesh(new THREE.ConeGeometry(0.11, 1.3, 6), gm2); chofa.position.set(0, 7.75, 4.25); chofa.rotation.x = 0.5; ub.add(chofa);
+                ub.position.set(-14, this.gy(-14, -23), -23); ub.rotation.y = 0.32; g.add(this.shadowed(ub));
+                this.aoSpots.push({ x: -14, z: -23, r: 5.2, f: 1.4, k: 0.4 });
+
+                // ต้นโพธิ์ใหญ่หลังวัด (ผูกผ้าแพร)
+                const bodhi = (x, z, sc) => {
+                    const t = new THREE.Group(), rnd = seededRandom(Math.floor(x * 31 + z * 7) + 99);
+                    this.trunk(t, 0.5 * sc, 4.4 * sc, 0x9a836a);
+                    this.canopy(t, 0, 5.7 * sc, 0, 2.3 * sc, 1.5 * sc, 2.3 * sc, [0x3e7a2c, 0x4f8f35, 0x356b25], 9, rnd, 0, { cards: 12, detail: 2 });
+                    const sash = this.mesh(new THREE.TorusGeometry(0.52 * sc, 0.06, 8, 24), 0xff8c1a); sash.rotation.x = Math.PI / 2; sash.position.y = 1.3 * sc; t.add(sash);
+                    t.position.set(x, this.gy(x, z), z); g.add(this.shadowed(t)); this.aoSpots.push({ x, z, r: 0.45, f: 2.2, k: 0.4 });
+                };
+                bodhi(13.5, -16.5, 1); bodhi(-18, -8, 0.85);
 
                 // ธงทิว
                 const flagCols = [0xffd400, 0xffffff, 0xff3b30, 0x1e88e5, 0x43a047];
                 const triGeo = new THREE.BufferGeometry();
                 triGeo.setAttribute('position', new THREE.Float32BufferAttribute([-0.16, 0, 0, 0.16, 0, 0, 0, -0.42, 0], 3));
                 triGeo.computeVertexNormals();
-                const flagMats = flagCols.map(c => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide }));
+                const flagMats = flagCols.map(c => new THREE.MeshStandardMaterial({ color: c, side: THREE.DoubleSide, roughness: 0.8 }));
                 const string = (ax, az, bx, bz, h) => {
-                    for (const [px, pz] of [[ax, az], [bx, bz]]) { const p = this.mesh(new THREE.CylinderGeometry(0.06, 0.08, h, 8), 0x7a5230); p.position.set(px, this.gy(px, pz) + h / 2, pz); g.add(p); }
+                    for (const [px, pz] of [[ax, az], [bx, bz]]) { const pp = this.mesh(new THREE.CylinderGeometry(0.06, 0.08, h, 8), 0x8a6a48); pp.position.set(px, this.gy(px, pz) + h / 2, pz); pp.castShadow = true; g.add(pp); }
                     const ya = this.gy(ax, az) + h, yb = this.gy(bx, bz) + h, len = Math.hypot(bx - ax, bz - az), n = Math.floor(len / 0.5), pts = [];
                     for (let i = 0; i <= n; i++) {
                         const t = i / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t, y = ya + (yb - ya) * t - Math.sin(Math.PI * t) * 0.7;
                         pts.push(new THREE.Vector3(x, y, z));
-                        if (i > 0 && i < n) { const f = new THREE.Mesh(triGeo, flagMats[i % flagMats.length]); f.position.set(x, y, z); f.rotation.y = Math.atan2(-(bz - az), bx - ax); g.add(f); }
+                        if (i > 0 && i < n) { const f = new THREE.Mesh(triGeo, flagMats[i % flagMats.length]); f.position.set(x, y, z); f.rotation.set(0, Math.atan2(-(bz - az), bx - ax), Math.sin(i * 2.3) * 0.12); g.add(f); }
                     }
                     g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x555555 })));
                 };
-                string(-11, -9, 11, -9, 4.2); string(-11, -15, 11, -15, 4.8);
+                string(-11, -9.5, 11, -9.5, 4.2); string(-11, -15, 11, -15, 4.8);
 
-                // กำแพงแก้วเตี้ยๆ
-                [[0, -25, 44, 0.35], [-22, -12, 0.35, 26], [22, -12, 0.35, 26]].forEach(([x, z, w, d]) => {
-                    const wl = this.mesh(new THREE.BoxGeometry(w, 0.9, d), white); wl.position.set(x, this.gy(x, z) + 0.45, z); g.add(wl);
-                    const cap = this.mesh(new THREE.BoxGeometry(w + 0.1, 0.12, d + 0.1), 0xa33a22); cap.position.set(x, this.gy(x, z) + 0.96, z); g.add(cap);
+                // กำแพงแก้ว
+                const wallM = plaster(0xf3efe4), capM = new THREE.MeshStandardMaterial({ color: 0xb5482a, map: RF.map, normalMap: RF.normalMap, roughness: 0.75 });
+                [[0, -27, 48, 0.4], [-24, -12, 0.4, 30], [24, -12, 0.4, 30]].forEach(([x, z, w, d]) => {
+                    const wl = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(w, 1.0, d), Math.max(w, d) / 2, 1), wallM); wl.position.set(x, this.gy(x, z) + 0.5, z); g.add(this.shadowed(wl));
+                    const cap = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(w + 0.16, 0.14, d + 0.16), Math.max(w, d) / 1.5, 1), capM); cap.position.set(x, this.gy(x, z) + 1.07, z); g.add(cap);
                 });
             }
 
             // --- ลานหน้าโรงเรียน ---
             build_school(g) {
-                // อาคารเรียน
-                const bx = 2, bz = -20, by = this.gy(bx, bz);
-                const b = new THREE.Group();
-                const base = this.mesh(new THREE.BoxGeometry(15.4, 0.5, 4.8), 0x9c9c94); base.position.y = 0.25; b.add(base);
-                const wall = this.mesh(new THREE.BoxGeometry(15, 3.2, 4.4), 0xf1e3c4); wall.position.y = 2.1; b.add(wall);
-                const shape = new THREE.Shape(); shape.moveTo(-2.75, 0); shape.lineTo(2.75, 0); shape.lineTo(0, 1.9); shape.closePath();
-                const roofGeo = new THREE.ExtrudeGeometry(shape, { depth: 15.8, bevelEnabled: false }); roofGeo.translate(0, 0, -7.9);
-                const roof = this.mesh(roofGeo, 0xa63a25); roof.rotation.y = Math.PI / 2; roof.position.y = 3.7; b.add(roof);
-                const winGeo = new THREE.BoxGeometry(1.1, 1.0, 0.08);
-                [-6.5, -4.5, -2.5, 2.5, 4.5, 6.5].forEach(x => { const w = this.mesh(winGeo, 0x2b4d6e, { roughness: 0.3 }); w.position.set(x, 2.3, 2.22); b.add(w); });
-                const door = this.mesh(new THREE.BoxGeometry(1.4, 2.1, 0.08), 0x6b3a1e); door.position.set(0, 1.55, 2.22); b.add(door);
-                const sign = new THREE.Mesh(new THREE.PlaneGeometry(5, 0.78), new THREE.MeshBasicMaterial({ map: createSignTexture('โรงเรียนบ้านลานดิน') }));
-                sign.position.set(0, 3.25, 2.27); b.add(sign);
-                b.position.set(bx, by, bz); g.add(b);
-
-                // ต้นจามจุรี
-                [[-15, -14, 1], [15, -15, 1.1], [-17, 4, 0.9], [17, 4, 1]].forEach(([x, z, s]) => {
-                    const t = new THREE.Group();
-                    const tr = this.mesh(new THREE.CylinderGeometry(0.3 * s, 0.45 * s, 3 * s, 8), 0x5c4a32); tr.position.y = 1.5 * s; t.add(tr);
-                    const c = this.mesh(new THREE.SphereGeometry(3 * s, 16, 10), 0x3f7f32, { roughness: 0.9 }); c.scale.y = 0.55; c.position.y = 3.7 * s; t.add(c);
-                    t.position.set(x, this.gy(x, z), z); g.add(t);
+                const PL = this.lib('plaster'), RF = this.lib('roof');
+                const pl = (col, r) => new THREE.MeshStandardMaterial({ color: col, map: PL.map, normalMap: PL.normalMap, roughness: r || 0.9 });
+                // อาคารเรียนไม้ชั้นเดียว มีระเบียงหน้า
+                const bx = 2, bz = -20, b = new THREE.Group(), white = pl(0xf2efe6);
+                const base = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(16.2, 0.5, 6.0), 6, 1), pl(0xa9a69c)); base.position.set(0, 0.25, 0.4); b.add(base);
+                const wall = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(15, 3.2, 4.4), 6, 1.5), pl(0xf3e2bd)); wall.position.y = 2.1; b.add(wall);
+                const dado = new THREE.Mesh(this.scaleUV(new THREE.BoxGeometry(15.04, 0.95, 4.44), 6, 0.5), pl(0x6f9a6a, 0.8)); dado.position.y = 0.97; b.add(dado);
+                const shape = new THREE.Shape(); shape.moveTo(-3.3, 0); shape.lineTo(3.3, 0); shape.lineTo(0, 2.0); shape.closePath();
+                const roofGeo = new THREE.ExtrudeGeometry(shape, { depth: 16.4, bevelEnabled: false }); roofGeo.translate(0, 0, -8.2); this.scaleUV(roofGeo, 0.7, 0.7);
+                const roof = new THREE.Mesh(roofGeo, new THREE.MeshStandardMaterial({ color: 0xb4452b, map: RF.map, normalMap: RF.normalMap, roughness: 0.75 })); roof.rotation.y = Math.PI / 2; roof.position.set(0, 3.7, 0.4); b.add(roof);
+                const glass = new THREE.MeshStandardMaterial({ color: 0x24394d, roughness: 0.08, metalness: 0.3, envMapIntensity: 1.6 });
+                [-6.3, -4.4, -2.5, 2.5, 4.4, 6.3].forEach(x => {
+                    const fr = new THREE.Mesh(new THREE.BoxGeometry(1.34, 1.24, 0.06), white); fr.position.set(x, 2.35, 2.21); b.add(fr);
+                    const gl = new THREE.Mesh(new THREE.BoxGeometry(1.14, 1.04, 0.07), glass); gl.position.set(x, 2.35, 2.215); b.add(gl);
+                    const m1 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.04, 0.09), white); m1.position.set(x, 2.35, 2.22); b.add(m1);
+                    const m2 = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.05, 0.09), white); m2.position.set(x, 2.35, 2.22); b.add(m2);
                 });
+                const dfr = new THREE.Mesh(new THREE.BoxGeometry(1.64, 2.3, 0.06), white); dfr.position.set(0, 1.63, 2.21); b.add(dfr);
+                const door = this.mesh(new THREE.BoxGeometry(1.4, 2.12, 0.08), 0x7b4a2a, { roughness: 0.7 }); door.position.set(0, 1.56, 2.215); b.add(door);
+                const sign = new THREE.Mesh(new THREE.PlaneGeometry(5, 0.78), new THREE.MeshStandardMaterial({ map: createSignTexture('โรงเรียนบ้านลานดิน'), roughness: 0.6 }));
+                sign.position.set(0, 3.25, 2.26); b.add(sign);
+                for (let x = -7.3; x <= 7.31; x += 2.433) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.25, 0.16), white); post.position.set(x, 2.12, 3.15); b.add(post); }
+                b.position.set(bx, this.gy(bx, bz), bz); g.add(this.shadowed(b));
+                this.aoSpots.push({ x: bx, z: bz + 0.5, r: 6.5, f: 1.6, k: 0.35 });
+
+                // ต้นจามจุรี ทรงพุ่มแผ่กว้าง
+                [[-15, -14, 1], [15, -15, 1.1], [-17, 4, 0.9], [17, 4, 1]].forEach(([x, z, sc], i) => {
+                    const t = new THREE.Group(), rnd = seededRandom(i * 13 + 5);
+                    this.trunk(t, 0.42 * sc, 3.4 * sc, 0x8d7860);
+                    this.canopy(t, 0, 4.4 * sc, 0, 2.6 * sc, 1.5 * sc, 2.2 * sc, [0x3f7f32, 0x4a8c3a, 0x356f2a], 9, rnd, 0.6, { cards: 12, detail: 2 });
+                    t.position.set(x, this.gy(x, z), z); g.add(this.shadowed(t)); this.aoSpots.push({ x, z, r: 0.4, f: 2.4, k: 0.4 });
+                });
+
+                // แนวพุ่มไม้ตัดแต่งหน้าอาคาร
+                const hr = seededRandom(404);
+                for (let i = 0; i < 9; i++) {
+                    const x = -5 + i * 1.75, z = -15.6;
+                    if (Math.abs(x - bx) < 1.4) continue;   // เว้นทางเข้าประตู
+                    const hg = new THREE.Group();
+                    this.canopy(hg, 0, 0.42, 0, 0.32, 0.48, 0.62, [0x3f7a30, 0x4c8a3a], 3, hr, 0.72, { cards: 9, detail: 2 });
+                    hg.position.set(x, this.gy(x, z), z); g.add(this.shadowed(hg));
+                    this.aoSpots.push({ x, z, r: 0.6, f: 0.5, k: 0.45 });
+                }
             }
 
             // --- ลานในป่าหญ้า ---
             build_grass(g) {
-                const rnd = seededRandom(20261114);
-                const trunkGeo = new THREE.CylinderGeometry(0.12, 0.2, 1.3, 7);
-                const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3825, roughness: 0.9 });
-                const pineMats = [0x2f5d2e, 0x274f28, 0x37663a].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 }));
-                const roundMat = new THREE.MeshStandardMaterial({ color: 0x4c8a3a, roughness: 0.9 });
-                const cones = [new THREE.ConeGeometry(1.1, 1.6, 9), new THREE.ConeGeometry(0.85, 1.4, 9), new THREE.ConeGeometry(0.6, 1.2, 9)];
-                const ball = new THREE.SphereGeometry(1, 12, 9);
-                for (let i = 0; i < 46; i++) {
-                    const ang = rnd() * Math.PI * 2, rad = 12 + rnd() * 12, x = Math.cos(ang) * rad, z = Math.sin(ang) * rad - 4;
-                    const s = 0.8 + rnd() * 0.8, t = new THREE.Group();
-                    const tr = new THREE.Mesh(trunkGeo, trunkMat); tr.position.y = 0.65; t.add(tr);
-                    if (rnd() < 0.6) {
-                        cones.forEach((c, k) => { const m = new THREE.Mesh(c, pineMats[(i + k) % 3]); m.position.y = 1.6 + k * 0.85; t.add(m); });
-                        t.scale.setScalar(s * 1.3);
-                    } else {
-                        [[0, 2.1, 0, 1.1], [0.6, 1.8, 0.2, 0.8], [-0.5, 1.9, -0.3, 0.85]].forEach(([dx, dy, dz, r]) => { const m = new THREE.Mesh(ball, roundMat); m.position.set(dx, dy, dz); m.scale.setScalar(r); t.add(m); });
-                        t.scale.setScalar(s * 1.2);
-                    }
-                    t.position.set(x, this.gy(x, z), z); g.add(t);
+                const rnd = seededRandom(20261114), d = new THREE.Object3D(), c = new THREE.Color(), B = this.lib('bark');
+                const mk = (geo, mat, count, shadow, recv) => { const m = new THREE.InstancedMesh(geo, mat, count); m.frustumCulled = false; if (shadow === false) m.userData.noShadow = true; else { m.castShadow = true; } m.receiveShadow = recv !== false; g.add(m); return m; };
+                const done = (m) => { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; };
+                // ป่ารอบลาน (วาดแบบ instancing: ต้นไม้ 54 ต้นใช้คำสั่งวาดแค่ไม่กี่ครั้ง)
+                const trees = [];
+                for (let i = 0; i < 54; i++) {
+                    const ang = rnd() * Math.PI * 2, rad = 13 + rnd() * 16, x = Math.cos(ang) * rad, z = Math.sin(ang) * rad - 4;
+                    trees.push({ x, z, y: this.gy(x, z), s: (0.9 + rnd() * 0.9) * 1.3, pine: rnd() < 0.55, rot: rnd() * 6.283, tint: 0.8 + rnd() * 0.4 });
+                    this.aoSpots.push({ x, z, r: 0.2, f: 1.5, k: 0.35 });
                 }
-                // ก้อนหิน
-                const rockGeo = new THREE.DodecahedronGeometry(0.4, 0), rockMat = new THREE.MeshStandardMaterial({ color: 0x7d8572, roughness: 1 });
-                for (let i = 0; i < 12; i++) {
-                    const ang = rnd() * Math.PI * 2, rad = 10 + rnd() * 5, x = Math.cos(ang) * rad, z = Math.sin(ang) * rad - 2;
-                    const r = new THREE.Mesh(rockGeo, rockMat); r.scale.set(0.6 + rnd(), 0.4 + rnd() * 0.5, 0.6 + rnd()); r.rotation.y = rnd() * 3;
-                    r.position.set(x, this.gy(x, z) + 0.1, z); g.add(r);
+                const pines = trees.filter(t => t.pine), rounds = trees.filter(t => !t.pine);
+                const trunkGeo = new THREE.CylinderGeometry(0.1, 0.2, 1, 8); trunkGeo.translate(0, 0.5, 0);
+                const tr = mk(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x8a7258, map: B.map, normalMap: B.normalMap, roughness: 1 }), trees.length);
+                trees.forEach((t, i) => { d.position.set(t.x, t.y, t.z); d.rotation.set(0, t.rot, 0); d.scale.set(t.s, (t.pine ? 1.5 : 2.3) * t.s, t.s); d.updateMatrix(); tr.setMatrixAt(i, d.matrix); });
+                done(tr);
+                const tierMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true, envMapIntensity: 1.0 });
+                const pineCols = [0x2f5d2e, 0x274f28, 0x37663a];
+                [[1.15, 1.7, 1.55], [0.9, 1.5, 2.45], [0.62, 1.3, 3.3], [0.36, 1.05, 4.05]].forEach(([r, h, y], k) => {
+                    const geo = new THREE.ConeGeometry(r, h, 11, 3), pp = geo.attributes.position, col = [];
+                    for (let i = 0; i < pp.count; i++) { const yy = pp.getY(i) / h + 0.5, rr = Math.hypot(pp.getX(i), pp.getZ(i)) / r, sh = 0.5 + 0.5 * Math.max(yy, rr * 0.85); col.push(sh, sh, sh); pp.setY(i, pp.getY(i) - rr * rr * 0.12 * h); }
+                    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); geo.computeVertexNormals();
+                    const inst = mk(geo, tierMat, pines.length, true, false);
+                    pines.forEach((t, i) => { d.position.set(t.x, t.y + y * t.s, t.z); d.rotation.set(0, t.rot + k, 0); d.scale.setScalar(t.s); d.updateMatrix(); inst.setMatrixAt(i, d.matrix); inst.setColorAt(i, c.set(pineCols[(i + k) % 3]).convertSRGBToLinear().multiplyScalar(t.tint)); });
+                    done(inst);
+                });
+                const FO = this.lib('foliage');
+                const leafMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: FO.map, normalMap: FO.normalMap, roughness: 0.88, vertexColors: true, envMapIntensity: 1.0 });
+                [[0, 2.5, 0, 1.2], [0.7, 2.1, 0.25, 0.85], [-0.6, 2.2, -0.35, 0.9]].forEach(([dx, dy, dz, r], k) => {
+                    const inst = mk(this.blobGeo(k, 2), leafMat, rounds.length, true, false);
+                    rounds.forEach((t, i) => { const cs = Math.cos(t.rot), sn = Math.sin(t.rot); d.position.set(t.x + (dx * cs - dz * sn) * t.s, t.y + dy * t.s, t.z + (dx * sn + dz * cs) * t.s); d.rotation.set(0, t.rot * 3 + k, 0); d.scale.setScalar(r * t.s); d.updateMatrix(); inst.setMatrixAt(i, d.matrix); inst.setColorAt(i, c.set([0x4c8a3a, 0x3f7a30, 0x5a9a3c][(i + k) % 3]).convertSRGBToLinear().multiplyScalar(t.tint)); });
+                    done(inst);
+                });
+                // ก้อนหินมีมอส
+                const rocks = mk(this.rockGeo(1), new THREE.MeshStandardMaterial({ color: 0x9a9f90, roughness: 1, vertexColors: true }), 14);
+                for (let i = 0; i < 14; i++) {
+                    const ang = rnd() * Math.PI * 2, rad = 10 + rnd() * 6, x = Math.cos(ang) * rad, z = Math.sin(ang) * rad - 2, sc = 0.3 + rnd() * 0.5;
+                    d.position.set(x, this.gy(x, z) + sc * 0.2, z); d.rotation.set(0, rnd() * 6, 0); d.scale.set(sc * (0.8 + rnd() * 0.5), sc, sc * (0.8 + rnd() * 0.5)); d.updateMatrix(); rocks.setMatrixAt(i, d.matrix);
+                    this.aoSpots.push({ x, z, r: sc * 0.8, f: 0.5, k: 0.45 });
                 }
-                // กอหญ้า 3D (InstancedMesh)
-                const tuftGeo = new THREE.ConeGeometry(0.035, 0.18, 3);
-                const tuftMat = new THREE.MeshStandardMaterial({ color: 0x5d8231, roughness: 0.9 });
-                const N = 700, inst = new THREE.InstancedMesh(tuftGeo, tuftMat, N), dummy = new THREE.Object3D();
+                done(rocks);
+                // กอหญ้า 3D ไหวตามลม (เว้นลานเล่น)
+                const N = 2800, blades = mk(this.bladeGeo(), this.windMat(0x86b34c, 0.2), N, false);
                 let k = 0;
                 while (k < N) {
-                    const x = (rnd() - 0.5) * 34, z = (rnd() - 0.5) * 30 - 4;
-                    if (Math.abs(x) < 5 && z > -9.5 && z < 4) continue;   // เว้นพื้นที่เล่น
-                    dummy.position.set(x, this.gy(x, z) + 0.08, z);
-                    dummy.rotation.set((rnd() - 0.5) * 0.4, rnd() * 3, (rnd() - 0.5) * 0.4);
-                    dummy.scale.setScalar(0.7 + rnd() * 0.8);
-                    dummy.updateMatrix(); inst.setMatrixAt(k++, dummy.matrix);
+                    const x = (rnd() - 0.5) * 40, z = (rnd() - 0.5) * 36 - 4;
+                    if (Math.abs(x) < 5 && z > -9.6 && z < 4) continue;
+                    const sc = 0.14 + rnd() * 0.22;
+                    d.position.set(x, this.gy(x, z), z); d.rotation.set(0, rnd() * 6.283, 0); d.scale.set(sc * 1.4, sc, sc * 1.4); d.updateMatrix(); blades.setMatrixAt(k++, d.matrix);
                 }
-                inst.instanceMatrix.needsUpdate = true;
-                g.add(inst);
+                done(blades);
             }
 
             // ---------------------------------------------------------------
@@ -1240,7 +1840,7 @@
                     }
                     const obj = this['fx_' + o.k](o, rnd);
                     if (!obj) continue;
-                    obj.traverse(c => { if (c.isMesh && !c.userData.noShadow) { c.castShadow = true; c.receiveShadow = true; } });
+                    this.shadowed(obj);
                     g.add(obj);
                     if (ph.fade) {   // ของสูงที่อาจบังกล้อง → จางลงอัตโนมัติ
                         const mats = [];
@@ -1336,7 +1936,7 @@
             }
             conformMesh(geo, x, z, lift, color, opts) {
                 const pos = geo.attributes.position;
-                const extra = this.stage === 1 ? 0 : 0.035;   // พื้นเนินเป็นตาข่ายหยาบ ยกขึ้นอีกนิดกันจมดิน
+                const extra = this.stage === 1 ? 0 : 0.016;   // เผื่อระยะเล็กน้อยบนพื้นเนิน
                 for (let i = 0; i < pos.count; i++) pos.setY(i, this.gy(x + pos.getX(i), z + pos.getZ(i)) + lift + extra);
                 geo.computeVertexNormals();
                 const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(Object.assign({ color, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }, opts)));
@@ -1345,164 +1945,286 @@
             }
 
             // ---------- ชิ้นส่วนช่วยสร้าง ----------
-            canopy(grp, cx, cy, cz, spread, rMin, rMax, colors, n, rnd, flat) {
+            // ก้อนพุ่มใบ: ทรงกลมผิวขรุขระ ด้านบนสว่าง ใต้พุ่มมืด
+            blobGeo(variant, detail = 4) {
+                return this.keepGeo('blob' + variant + '_' + detail, () => {
+                    const g = new THREE.IcosahedronGeometry(1, detail), p = g.attributes.position, n = g.attributes.normal, col = [], s = variant * 2.37 + 0.7;
+                    for (let i = 0; i < p.count; i++) {
+                        const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+                        const d = 1 + 0.17 * Math.sin(x * 3.1 + s) * Math.sin(y * 2.7 + s * 1.3) + 0.12 * Math.sin(z * 4.3 + s * 0.7) * Math.cos(x * 2.2 + y * 1.7) + 0.06 * Math.sin((x + y + z) * 7 + s);
+                        p.setXYZ(i, x * d, y * d, z * d); n.setXYZ(i, x, y, z);
+                        const sh = (0.62 + 0.38 * (y * 0.5 + 0.5)) * (0.9 + 0.55 * (d - 1)); col.push(sh, sh, sh);
+                    }
+                    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+                    this.scaleUV(g, 4, 2);
+                    return g;
+                });
+            }
+            rockGeo(variant) {
+                return this.keepGeo('rock' + variant, () => {
+                    const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position, n = g.attributes.normal, col = [], s = variant * 3.1 + 1;
+                    for (let i = 0; i < p.count; i++) {
+                        const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+                        let d = 1 + 0.2 * Math.sin(x * 2.3 + s) * Math.cos(z * 1.9 + s) + 0.14 * Math.sin(y * 3.7 + s * 2) + 0.08 * Math.sin((x - z) * 6.1 + s);
+                        d = (Math.round(d * 8) / 8) * 0.45 + d * 0.55;   // เหลี่ยมมุมแบบหิน
+                        p.setXYZ(i, x * d, y * d * 0.74, z * d); n.setXYZ(i, x, y * 1.3, z);
+                        const moss = clamp((y - 0.3) * 2.2, 0, 1) * (0.55 + 0.45 * Math.sin(x * 5 + z * 4 + s)), v = 0.82 + 0.16 * Math.sin(x * 9 + y * 7 + z * 8 + s);
+                        col.push(v * (1 - moss) + 0.36 * moss, v * (1 - moss) + 0.6 * moss, v * (1 - moss) + 0.24 * moss);
+                    }
+                    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+                    return g;
+                });
+            }
+            // กอหญ้า 3 ใบ โคนเข้ม ปลายอ่อน
+            bladeGeo() {
+                return this.keepGeo('blade', () => {
+                    const pos = [], col = [], nor = [], idx = [];
+                    for (let b = 0; b < 3; b++) {
+                        const a = b * 2.094 + 0.4, dx = Math.cos(a), dz = Math.sin(a), base = pos.length / 3;
+                        [[0, 0, 0.04], [0.5, 0.12, 0.028], [1, 0.4, 0]].forEach(([t, lean, hw]) => {
+                            const cx = dx * lean, cz = dz * lean;
+                            pos.push(cx + dz * hw, t, cz - dx * hw, cx - dz * hw, t, cz + dx * hw);
+                            const sh = 0.55 + 0.45 * t; col.push(sh * 0.82, sh, sh * 0.6, sh * 0.82, sh, sh * 0.6); nor.push(0, 1, 0, 0, 1, 0);
+                        });
+                        idx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2, base + 2, base + 3, base + 4, base + 3, base + 5, base + 4);
+                    }
+                    const g = new THREE.BufferGeometry();
+                    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+                    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+                    g.setIndex(idx);
+                    return g;
+                });
+            }
+            // วัสดุใบหญ้าที่ไหวตามลม (ทิศลมเดียวกันทั้งลาน)
+            windMat(color, amp) {
+                const m = new THREE.MeshStandardMaterial({ color, vertexColors: true, side: THREE.DoubleSide, roughness: 0.9, envMapIntensity: 1.0 });
+                m.onBeforeCompile = (sh) => {
+                    sh.uniforms.uTime = this.windU; sh.uniforms.uAmp = { value: amp };
+                    sh.vertexShader = 'uniform float uTime;\nuniform float uAmp;\n' + sh.vertexShader.replace('#include <project_vertex>', `
+                        vec4 mvPosition = vec4(transformed, 1.0);
+                        float wPh = 0.0; float wH = transformed.y;
+                        #ifdef USE_INSTANCING
+                            mvPosition = instanceMatrix * mvPosition;
+                            wPh = instanceMatrix[3].x * 0.9 + instanceMatrix[3].z * 0.7;
+                            wH *= length(instanceMatrix[1].xyz);
+                        #endif
+                        float wS = sin(uTime * 1.7 + wPh) * 0.6 + sin(uTime * 3.3 + wPh * 1.9) * 0.3 + 0.25;
+                        mvPosition.x += wS * wH * transformed.y * uAmp; mvPosition.z += wS * 0.45 * wH * transformed.y * uAmp;
+                        mvPosition = modelViewMatrix * mvPosition;
+                        gl_Position = projectionMatrix * mvPosition;`);
+                };
+                return m;
+            }
+            // ทรงพุ่มต้นไม้: ก้อนพุ่ม + แผ่นใบไม้จริงรอบๆ ให้ขอบพุ่มเป็นใบ ไม่ใช่ลูกบอล
+            canopy(grp, cx, cy, cz, spread, rMin, rMax, colors, n, rnd, flat, opts = {}) {
+                const mats = {}, blobs = [], fy = flat || 1, F = this.lib('foliage');
                 for (let i = 0; i < n; i++) {
-                    const c = this.mesh(new THREE.SphereGeometry(rMin + rnd() * (rMax - rMin), 12, 9), colors[i % colors.length], { roughness: 0.9 });
-                    c.position.set(cx + (rnd() - 0.5) * spread * 2, cy + (rnd() - 0.3) * spread * 0.6, cz + (rnd() - 0.5) * spread * 2);
-                    if (flat) c.scale.y = flat;
-                    grp.add(c);
+                    const col = colors[i % colors.length], r = rMin + rnd() * (rMax - rMin);
+                    const mat = mats[col] || (mats[col] = new THREE.MeshStandardMaterial({ color: col, map: F.map, normalMap: F.normalMap, roughness: 0.85, vertexColors: true, envMapIntensity: 1.0, emissive: col, emissiveIntensity: 0.1 }));
+                    const m = new THREE.Mesh(this.blobGeo(i % 3, opts.detail), mat);
+                    m.position.set(cx + (rnd() - 0.5) * spread * 2, cy + (rnd() - 0.3) * spread * 0.6, cz + (rnd() - 0.5) * spread * 2);
+                    m.scale.set(r, r * fy, r); m.rotation.y = rnd() * 6.283; m.userData.castOnly = true;
+                    grp.add(m); blobs.push({ p: m.position, r, col });
                 }
-            }
-            trunk(grp, r, h, color) {
-                const t = this.mesh(new THREE.CylinderGeometry(r * 0.75, r, h, 10), color || 0x5b4330, { roughness: 1 });
-                t.position.y = h / 2; grp.add(t);
-                for (let i = 0; i < 4; i++) {   // รากแผ่โคนต้น
-                    const root = this.mesh(new THREE.ConeGeometry(r * 0.35, r * 1.6, 6), color || 0x5b4330, { roughness: 1 });
-                    const a = i * Math.PI / 2 + 0.4;
-                    root.position.set(Math.cos(a) * r * 0.9, r * 0.25, Math.sin(a) * r * 0.9);
-                    root.rotation.set(Math.sin(a) * 1.2, 0, -Math.cos(a) * 1.2);
-                    grp.add(root);
+                const per = opts.cards === undefined ? 28 : opts.cards;
+                if (!per) return;
+                const inst = new THREE.InstancedMesh(this.keepGeo('card', () => new THREE.PlaneGeometry(1, 1)),
+                    new THREE.MeshStandardMaterial({ map: this.lib('leaves'), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.85, envMapIntensity: 1.0 }), blobs.length * per);
+                const d = new THREE.Object3D(), dir = new THREE.Vector3(), c = new THREE.Color();
+                let k = 0;
+                for (const b of blobs) for (let j = 0; j < per; j++) {
+                    dir.set(rnd() * 2 - 1, rnd() * 1.5 - 0.45, rnd() * 2 - 1).normalize();
+                    const rr = b.r * (0.9 + rnd() * 0.22);
+                    d.position.set(b.p.x + dir.x * rr, b.p.y + dir.y * rr * fy, b.p.z + dir.z * rr);
+                    d.lookAt(d.position.x + dir.x + (rnd() - 0.5) * 0.7, d.position.y + dir.y + (rnd() - 0.5) * 0.7, d.position.z + dir.z + (rnd() - 0.5) * 0.7);
+                    d.rotateZ(rnd() * 6.283);
+                    d.scale.setScalar(b.r * (0.44 + rnd() * 0.4) * (opts.cardScale || 1));
+                    d.updateMatrix(); inst.setMatrixAt(k, d.matrix);
+                    inst.setColorAt(k++, c.set(b.col).convertSRGBToLinear().multiplyScalar(0.95 + rnd() * 0.5 + Math.max(0, dir.y) * 0.35));
                 }
-                return t;
+                inst.instanceMatrix.needsUpdate = true; inst.instanceColor.needsUpdate = true;
+                inst.frustumCulled = false; inst.userData.noShadow = true;
+                grp.add(inst);
             }
-            logMesh(a, b, r, bark, end) {
-                const [ax, az] = a, [bx, bz] = b;
-                const ya = this.gy(ax, az) + r, yb = this.gy(bx, bz) + r, len = Math.hypot(bx - ax, bz - az);
-                const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.05, len + r * 2, 14), [
-                    new THREE.MeshStandardMaterial({ color: bark, roughness: 1 }),
-                    new THREE.MeshStandardMaterial({ color: end, roughness: 0.9 }),
-                    new THREE.MeshStandardMaterial({ color: end, roughness: 0.9 })]);
+            // ลำต้น: โคนบานมีพูพอน ผิวเปลือกไม้นูนจริง
+            trunk(grp, r, h, color, opts = {}) {
+                const geo = new THREE.CylinderGeometry(1, 1, 1, 14, 9, true), p = geo.attributes.position, uv = geo.attributes.uv;
+                const seed = r * 37 + h * 11, bx = opts.bend ? opts.bend[0] : 0, bz = opts.bend ? opts.bend[1] : 0, top = opts.top === undefined ? 0.62 : opts.top;
+                for (let i = 0; i < p.count; i++) {
+                    const a = Math.atan2(p.getZ(i), p.getX(i)), yy = p.getY(i) + 0.5;
+                    const rad = r * (top + (0.82 - top) * (1 - yy)) * (1 + 0.42 * Math.exp(-yy * h / 0.26) * (0.6 + 0.4 * Math.cos(a * 4 + seed))) * (1 + 0.04 * Math.sin(a * 3 + yy * 9 + seed));
+                    p.setXYZ(i, Math.cos(a) * rad + bx * yy * yy, yy * h, Math.sin(a) * rad + bz * yy * yy);
+                    uv.setXY(i, uv.getX(i) * Math.max(1, Math.round(r * 5)), uv.getY(i) * h / 1.8);
+                }
+                geo.computeVertexNormals();
+                const B = this.lib('bark');
+                const t = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: color || 0x8f7558, map: B.map, normalMap: B.normalMap, roughness: 1, envMapIntensity: 0.4 }));
+                grp.add(t); return t;
+            }
+            logMesh(a, b, r, barkCol) {
+                const [ax, az] = a, [bx, bz] = b, B = this.lib('bark'), R = this.lib('rings');
+                const ya = this.gy(ax, az) + r, yb = this.gy(bx, bz) + r, len = Math.hypot(bx - ax, bz - az) + r * 2;
+                const geo = new THREE.CylinderGeometry(r, r * 1.06, len, 18, 1), uv = geo.attributes.uv;
+                for (let i = 0; i < 19 * 2; i++) uv.setXY(i, uv.getX(i) * 2, uv.getY(i) * len / 1.8);   // เฉพาะผิวข้าง
+                const end = () => new THREE.MeshStandardMaterial({ color: 0xf2e2c4, map: R, roughness: 0.85 });
+                const m = new THREE.Mesh(geo, [new THREE.MeshStandardMaterial({ color: barkCol, map: B.map, normalMap: B.normalMap, roughness: 1 }), end(), end()]);
                 m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(bx - ax, yb - ya, bz - az).normalize());
                 m.position.set((ax + bx) / 2, (ya + yb) / 2, (az + bz) / 2);
                 return m;
             }
             at(grp, x, z) { grp.position.set(x, this.gy(x, z), z); return grp; }
-            jarBody(grp, r, color, rnd) {
-                const body = this.mesh(new THREE.SphereGeometry(r, 22, 16), color, { roughness: 0.35, metalness: 0.15 });
-                body.scale.y = 1.12; body.position.y = r * 1.08; grp.add(body);
-                const neck = this.mesh(new THREE.CylinderGeometry(r * 0.62, r * 0.74, r * 0.32, 20), color, { roughness: 0.35, metalness: 0.15 });
-                neck.position.y = r * 2.18; grp.add(neck);
-                const rim = this.mesh(new THREE.TorusGeometry(r * 0.62, r * 0.07, 8, 24), color, { roughness: 0.4 });
-                rim.rotation.x = Math.PI / 2; rim.position.y = r * 2.34; grp.add(rim);
-                const water = this.mesh(new THREE.CircleGeometry(r * 0.58, 20), 0x24343c, { roughness: 0.05, metalness: 0.4 });
-                water.rotation.x = -Math.PI / 2; water.position.y = r * 2.25; grp.add(water);
+            // โอ่ง/กระถาง: กลึงจากเส้นโค้งหน้าตัดจริง
+            jarGeo() {
+                return this.keepGeo('jar', () => {
+                    const g = new THREE.LatheGeometry(new THREE.SplineCurve([[0.001, 0], [0.5, 0], [0.6, 0.04], [0.84, 0.45], [1.0, 1.02], [0.97, 1.45], [0.82, 1.88], [0.66, 2.14], [0.63, 2.24], [0.7, 2.31], [0.72, 2.37], [0.66, 2.4], [0.59, 2.37], [0.57, 2.2]].map(([a, b]) => new THREE.Vector2(a, b))).getPoints(48), 40);
+                    const uv = g.attributes.uv, pp = g.attributes.position;
+                    for (let i = 0; i < uv.count; i++) uv.setY(i, pp.getY(i) / 2.4);
+                    return g;
+                });
+            }
+            potGeo() {
+                return this.keepGeo('pot', () => new THREE.LatheGeometry(new THREE.SplineCurve([[0.001, 0], [0.66, 0], [0.7, 0.04], [0.82, 0.6], [0.96, 1.2], [1.05, 1.26], [1.06, 1.34], [0.97, 1.36], [0.93, 1.26], [0.9, 1.12]].map(([a, b]) => new THREE.Vector2(a, b))).getPoints(34), 36));
+            }
+            jarBody(grp, r, color, map) {
+                const jar = new THREE.Mesh(this.jarGeo(), new THREE.MeshStandardMaterial({ color, map: map || null, roughness: 0.28, metalness: 0.05, side: THREE.DoubleSide, envMapIntensity: 1.15 }));
+                jar.scale.setScalar(r); grp.add(jar);
+                const water = this.mesh(new THREE.CircleGeometry(r * 0.6, 24), 0x1c2a30, { roughness: 0.03, metalness: 0.75, envMapIntensity: 1.4 });
+                water.rotation.x = -Math.PI / 2; water.position.y = r * 2.18; grp.add(water);
+            }
+            // แอ่งน้ำ/โคลนขอบไม่กลมเป๊ะ
+            wobblyDisc(o, lift, color, opts) {
+                const geo = new THREE.CircleGeometry(o.r, 44), p = geo.attributes.position, s = o.x * 3 + o.z;
+                geo.rotateX(-Math.PI / 2);
+                for (let i = 1; i < p.count; i++) { const a = Math.atan2(p.getZ(i), p.getX(i)), k = 1 + 0.11 * Math.sin(a * 3 + s) + 0.06 * Math.sin(a * 5 + s * 2) + 0.03 * Math.sin(a * 9); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
+                return this.conformMesh(geo, o.x, o.z, lift, color, opts);
             }
 
             // ---------- ลานดินชนบท ----------
             fx_mango(o, rnd) {
-                const g = new THREE.Group();
-                this.trunk(g, o.r, 3.8, 0x5b4330);
-                [[0.8, 2.9, 0.5], [-0.7, 3.1, -0.4]].forEach(([dx, y, ang]) => {
-                    const br = this.mesh(new THREE.CylinderGeometry(0.07, 0.13, 1.6, 7), 0x5b4330); br.position.set(dx * 0.6, y, 0); br.rotation.z = -ang * 1.2; g.add(br);
+                const g = new THREE.Group(), B = this.lib('bark');
+                this.trunk(g, o.r, 3.9, 0x94795c, { bend: [0.3, -0.12] });
+                const bm = new THREE.MeshStandardMaterial({ color: 0x94795c, map: B.map, normalMap: B.normalMap, roughness: 1 });
+                [[0.3, 3.0, 0.95, 0.4], [0.2, 3.2, -0.8, 2.3], [0.3, 3.4, 0.55, 4.4]].forEach(([dx, y, tilt, yaw]) => {
+                    const geo = new THREE.CylinderGeometry(0.06, 0.13, 2.0, 8); geo.translate(0, 1.0, 0);
+                    const br = new THREE.Mesh(geo, bm); br.position.set(dx, y, -0.1); br.rotation.set(0, yaw, tilt, 'YXZ'); g.add(br);
                 });
-                this.canopy(g, 0, 4.7, 0, 1.6, 0.9, 1.35, [0x2f6b25, 0x3b7d2c, 0x285c20], 10, rnd);
-                for (let i = 0; i < 6; i++) { const f = this.mesh(new THREE.SphereGeometry(0.11, 8, 6), 0x9bbf3a); f.scale.y = 1.4; f.position.set((rnd() - 0.5) * 2.6, 3.9 + rnd() * 0.4, (rnd() - 0.5) * 2.6); g.add(f); }
-                return this.at(g, o.x, o.z);
-            }
-            fx_jar(o, rnd) {
-                const g = new THREE.Group();
-                this.jarBody(g, o.r, 0x6e3b1b, rnd);
-                const dip = this.mesh(new THREE.SphereGeometry(o.r * 0.28, 14, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), 0xc0c4c8, { metalness: 0.85, roughness: 0.25, side: THREE.DoubleSide });
-                dip.position.set(o.r * 0.15, o.r * 2.42, 0); g.add(dip);   // ขันน้ำลอยบนปากโอ่ง
-                return this.at(g, o.x, o.z);
-            }
-            fx_mortar(o) {
-                const g = new THREE.Group();
-                const body = this.mesh(new THREE.CylinderGeometry(o.r, o.r * 1.1, 0.6, 18), 0x7a5232, { roughness: 0.9 }); body.position.y = 0.3; g.add(body);
-                const hole = this.mesh(new THREE.CircleGeometry(o.r * 0.7, 16), 0x2e1d10); hole.rotation.x = -Math.PI / 2; hole.position.y = 0.605; g.add(hole);
-                const pestle = this.mesh(new THREE.CylinderGeometry(0.05, 0.065, 1.5, 8), 0x9a7048); pestle.position.set(0.15, 0.95, 0.05); pestle.rotation.z = -0.35; g.add(pestle);
-                return this.at(g, o.x, o.z);
-            }
-            fx_hay(o, rnd) {
-                const g = new THREE.Group();
-                const pile = this.mesh(new THREE.SphereGeometry(o.r, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), 0xd6b25a, { roughness: 1 });
-                pile.scale.y = 0.75; g.add(pile);
-                const strawMat = new THREE.MeshStandardMaterial({ color: 0xe8c96a, roughness: 1 }), strawGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.5, 4);
-                for (let i = 0; i < 40; i++) {
-                    const a = rnd() * Math.PI * 2, el = rnd() * 1.2, st = new THREE.Mesh(strawGeo, strawMat);
-                    st.position.set(Math.cos(a) * Math.cos(el) * o.r, Math.sin(el) * o.r * 0.75, Math.sin(a) * Math.cos(el) * o.r);
-                    st.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3); g.add(st);
+                this.canopy(g, 0.3, 5.0, -0.1, 1.7, 0.95, 1.45, [0x356f29, 0x41832f, 0x2d6224], 11, rnd, 0, {});
+                const fm = [new THREE.MeshStandardMaterial({ color: 0x9bbf3a, roughness: 0.5 }), new THREE.MeshStandardMaterial({ color: 0xd9bf4a, roughness: 0.5 })];
+                for (let i = 0; i < 8; i++) {   // มะม่วงห้อยเป็นพวง
+                    const f = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), fm[i % 3 === 0 ? 1 : 0]); f.scale.set(0.85, 1.35, 0.8);
+                    f.position.set(0.3 + (rnd() - 0.5) * 2.8, 3.75 + rnd() * 0.5, -0.1 + (rnd() - 0.5) * 2.8); f.rotation.z = (rnd() - 0.5) * 0.5; g.add(f);
                 }
                 return this.at(g, o.x, o.z);
             }
-            fx_logseat(o) { return this.logMesh(o.a, o.b, o.r, 0x5b3d24, 0xcaa271); }
-            fx_puddle(o) {
+            fx_jar(o) {
                 const g = new THREE.Group();
-                g.add(this.conformDisc(o.x, o.z, o.r * 1.12, 0.008, 0x4a3018, { roughness: 0.6, transparent: true, opacity: 0.55, depthWrite: false }));
-                g.add(this.conformDisc(o.x, o.z, o.r, 0.014, 0x5d7f8f, { roughness: 0.08, metalness: 0.35, transparent: true, opacity: 0.78 }));
-                return g;
+                this.jarBody(g, o.r, 0x7a4424);
+                const dip = this.mesh(new THREE.SphereGeometry(o.r * 0.3, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), 0xd0d4d8, { metalness: 1, roughness: 0.22, side: THREE.DoubleSide, envMapIntensity: 1.3 });
+                dip.position.set(o.r * 0.14, o.r * 2.44, 0.02); dip.rotation.z = 0.12; g.add(dip);   // ขันน้ำลอยบนปากโอ่ง
+                return this.at(g, o.x, o.z);
+            }
+            fx_mortar(o) {   // ครกไม้ + สาก
+                const g = new THREE.Group(), B = this.lib('bark'), r = o.r;
+                const geo = new THREE.LatheGeometry(new THREE.SplineCurve([[0.001, 0], [0.95, 0], [1.0, 0.07], [0.8, 0.3], [0.84, 0.5], [1.04, 0.62], [1.05, 0.67], [0.82, 0.66], [0.6, 0.45], [0.001, 0.36]].map(([a, b]) => new THREE.Vector2(a * r, b))).getPoints(30), 24);
+                g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xb08a62, map: B.map, normalMap: B.normalMap, roughness: 0.85, side: THREE.DoubleSide })));
+                const pg = new THREE.CylinderGeometry(0.045, 0.07, 1.5, 10); pg.translate(0, 0.75, 0);
+                const pestle = new THREE.Mesh(pg, new THREE.MeshStandardMaterial({ color: 0xb89468, map: B.map, roughness: 0.7 })); pestle.position.set(0.02, 0.4, 0.02); pestle.rotation.z = -0.4; g.add(pestle);
+                return this.at(g, o.x, o.z);
+            }
+            fx_hay(o, rnd) {
+                const g = new THREE.Group(), TH = this.lib('thatch');
+                const pg = new THREE.SphereGeometry(o.r, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), p = pg.attributes.position;
+                for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = 1 + 0.07 * Math.sin(x * 9 + z * 7) + 0.05 * Math.sin(y * 13 + x * 5); p.setXYZ(i, x * k, y * 0.78 * k, z * k); }
+                pg.computeVertexNormals(); this.scaleUV(pg, 4, 2);
+                g.add(new THREE.Mesh(pg, new THREE.MeshStandardMaterial({ color: 0xe2ca82, map: TH.map, normalMap: TH.normalMap, roughness: 1 })));
+                const sg = new THREE.CylinderGeometry(0.011, 0.011, 0.55, 4), N = 90;
+                const st = new THREE.InstancedMesh(sg, new THREE.MeshStandardMaterial({ color: 0xecd58c, roughness: 1 }), N), d = new THREE.Object3D();
+                for (let i = 0; i < N; i++) {
+                    const a = rnd() * Math.PI * 2, el = rnd() * 1.25, rr = o.r * (0.95 + rnd() * 0.12);
+                    d.position.set(Math.cos(a) * Math.cos(el) * rr, Math.sin(el) * rr * 0.78, Math.sin(a) * Math.cos(el) * rr);
+                    d.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3); d.updateMatrix(); st.setMatrixAt(i, d.matrix);
+                }
+                st.instanceMatrix.needsUpdate = true; st.frustumCulled = false; g.add(st);
+                return this.at(g, o.x, o.z);
+            }
+            fx_logseat(o) { return this.logMesh(o.a, o.b, o.r, 0x9a7d5e); }
+            fx_puddle(o) {
+                const m = this.wobblyDisc(o, 0.012, 0x4a5c66, { roughness: 0.05, metalness: 0.92, transparent: true, opacity: 0.94, envMapIntensity: 1.0, normalMap: this.groundMat.normalMap });
+                m.material.normalScale.set(0.3, 0.3);
+                return m;
             }
 
             // ---------- ลานวัด ----------
             fx_driveway(o, rnd) {
-                const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+                const c = document.createElement('canvas'); c.width = 1024; c.height = 256;
                 const x = c.getContext('2d');
-                x.fillStyle = '#bdb8ad'; x.fillRect(0, 0, 512, 128);
-                for (let i = 0; i < 3000; i++) { x.fillStyle = `rgba(${rnd() > 0.5 ? '90,85,78' : '235,230,220'},${(rnd() * 0.25).toFixed(2)})`; x.fillRect(rnd() * 512, rnd() * 128, 2, 2); }
-                x.fillStyle = 'rgba(70,65,60,0.18)'; x.fillRect(0, 26, 512, 16); x.fillRect(0, 86, 512, 16);   // รอยล้อรถ
-                x.fillStyle = 'rgba(60,55,50,0.6)'; x.fillRect(0, 0, 3, 128);                                   // รอยต่อแผ่นปูน
-                x.fillStyle = 'rgba(120,110,95,0.5)'; x.fillRect(0, 0, 512, 3); x.fillRect(0, 125, 512, 3);
-                const tex = new THREE.CanvasTexture(c); tex.wrapS = THREE.RepeatWrapping; tex.repeat.set(o.hw * 2 / 3, 1);
-                return this.conformRect(o.x, o.z, o.hw, o.hd, o.rot, 0.012, 0xffffff, { map: tex, roughness: 0.85 }, Math.ceil(o.hw * 4), 4);
+                x.fillStyle = '#c3beb3'; x.fillRect(0, 0, 1024, 256);
+                for (let i = 0; i < 14000; i++) { x.fillStyle = `rgba(${rnd() > 0.5 ? '90,85,78' : '238,233,224'},${(rnd() * 0.22).toFixed(2)})`; x.fillRect(rnd() * 1024, rnd() * 256, 1 + rnd() * 2.5, 1 + rnd() * 2.5); }
+                for (let i = 0; i < 9; i++) { const px = rnd() * 1024, py = rnd() * 256, r = 30 + rnd() * 70, gr = x.createRadialGradient(px, py, 0, px, py, r); gr.addColorStop(0, 'rgba(80,74,66,0.16)'); gr.addColorStop(1, 'rgba(80,74,66,0)'); x.fillStyle = gr; x.fillRect(px - r, py - r, r * 2, r * 2); }
+                for (const y of [52, 172]) { const gr = x.createLinearGradient(0, y, 0, y + 34); gr.addColorStop(0, 'rgba(60,55,50,0)'); gr.addColorStop(0.5, 'rgba(60,55,50,0.22)'); gr.addColorStop(1, 'rgba(60,55,50,0)'); x.fillStyle = gr; x.fillRect(0, y, 1024, 34); }   // รอยล้อรถ
+                x.fillStyle = 'rgba(50,46,42,0.7)'; x.fillRect(0, 0, 5, 256);                                         // รอยต่อแผ่นปูน
+                x.strokeStyle = 'rgba(50,46,42,0.5)'; x.lineWidth = 1.2; x.beginPath(); let cx = 300, cy = 0; x.moveTo(cx, cy); while (cy < 256) { cx += (rnd() - 0.5) * 26; cy += 8 + rnd() * 14; x.lineTo(cx, cy); } x.stroke();   // รอยร้าว
+                x.fillStyle = 'rgba(110,100,84,0.55)'; x.fillRect(0, 0, 1024, 5); x.fillRect(0, 251, 1024, 5);
+                const tex = canvasTex(c); tex.repeat.set(o.hw * 2 / 3, 1);
+                return this.conformRect(o.x, o.z, o.hw, o.hd, o.rot, 0.012, 0xffffff, { map: tex, roughness: 0.82 }, Math.ceil(o.hw * 5), 5);
             }
             fx_pot(o, rnd) {
-                const g = new THREE.Group(), r = o.r, h = r * 1.35;
-                const glaze = o.plant === 'bonsai' ? 0x24477a : 0x8a4b2a;
-                const body = this.mesh(new THREE.CylinderGeometry(r, r * 0.72, h, 22), glaze, { roughness: 0.3, metalness: 0.1 }); body.position.y = h / 2; g.add(body);
-                const band = this.mesh(new THREE.TorusGeometry(r * 0.9, 0.025, 6, 24), 0xe8e2d0); band.rotation.x = Math.PI / 2; band.position.y = h * 0.62; g.add(band);
-                const rim = this.mesh(new THREE.TorusGeometry(r, 0.045, 8, 26), glaze, { roughness: 0.3 }); rim.rotation.x = Math.PI / 2; rim.position.y = h; g.add(rim);
-                const soil = this.mesh(new THREE.CircleGeometry(r * 0.95, 20), 0x3a2817); soil.rotation.x = -Math.PI / 2; soil.position.y = h - 0.03; g.add(soil);
-                if (o.plant === 'bonsai') {   // ไม้ดัด
-                    const tr = this.mesh(new THREE.CylinderGeometry(0.04, 0.08, 0.8, 7), 0x5a4632); tr.position.set(0.05, h + 0.4, 0); tr.rotation.z = -0.35; g.add(tr);
-                    [[0.25, h + 0.75, 0.05, 0.32], [-0.18, h + 0.9, -0.08, 0.26], [0.05, h + 1.08, 0.1, 0.22]].forEach(([dx, y, dz, rr]) => {
-                        const cl = this.mesh(new THREE.SphereGeometry(rr, 12, 8), 0x2e6b2a, { roughness: 0.9 }); cl.scale.y = 0.5; cl.position.set(dx, y, dz); g.add(cl);
-                    });
-                } else {   // เฟื่องฟ้า
-                    this.canopy(g, 0, h + 0.38, 0, 0.22, 0.17, 0.24, [0xd63384, 0x3f7d2c, 0xe75aa0], 9, rnd);
+                const g = new THREE.Group(), r = o.r, bonsai = o.plant === 'bonsai', glaze = bonsai ? 0x234a86 : 0x9a5530;
+                const pot = new THREE.Mesh(this.potGeo(), new THREE.MeshStandardMaterial({ color: glaze, roughness: bonsai ? 0.2 : 0.55, metalness: 0.05, side: THREE.DoubleSide, envMapIntensity: bonsai ? 1.3 : 0.8 }));
+                pot.scale.setScalar(r); g.add(pot);
+                const h = r * 1.3;
+                for (const [y, col] of [[0.5, 0xf0ead8], [0.62, 0xf0ead8]]) { const band = this.mesh(new THREE.TorusGeometry(r * (0.795 + (y - 0.5) * 0.3), 0.014, 6, 30), bonsai ? col : 0x6e3a1e); band.rotation.x = Math.PI / 2; band.position.y = h * y; g.add(band); }
+                const soil = this.mesh(new THREE.CircleGeometry(r * 0.92, 22), 0x3a2817, { roughness: 1 }); soil.rotation.x = -Math.PI / 2; soil.position.y = r * 1.2; g.add(soil);
+                if (bonsai) {   // ไม้ดัด: กิ่งคดเคี้ยว พุ่มเป็นชั้น
+                    const B = this.lib('bark'), bm = new THREE.MeshStandardMaterial({ color: 0x9a836a, map: B.map, normalMap: B.normalMap, roughness: 1 });
+                    const seg = (x0, y0, x1, y1, r0, r1) => { const len = Math.hypot(x1 - x0, y1 - y0), geo = new THREE.CylinderGeometry(r1, r0, len, 8); geo.translate(0, len / 2, 0); const m = new THREE.Mesh(geo, bm); m.position.set(x0, y0, 0); m.rotation.z = -Math.atan2(x1 - x0, y1 - y0); g.add(m); };
+                    seg(0, h * 0.9, 0.16, h + 0.42, 0.075, 0.055); seg(0.16, h + 0.42, -0.08, h + 0.78, 0.055, 0.04); seg(-0.08, h + 0.78, 0.1, h + 1.08, 0.04, 0.028); seg(0.16, h + 0.42, 0.42, h + 0.62, 0.035, 0.022);
+                    const FO = this.lib('foliage'), lm = new THREE.MeshStandardMaterial({ color: 0x3a7d34, map: FO.map, normalMap: FO.normalMap, roughness: 0.9, vertexColors: true });
+                    [[0.44, h + 0.7, 0.04, 0.3], [-0.14, h + 0.86, -0.06, 0.25], [0.1, h + 1.14, 0.08, 0.22]].forEach(([dx, y, dz, rr], i) => { const cl = new THREE.Mesh(this.blobGeo(i, 2), lm); cl.scale.set(rr, rr * 0.45, rr); cl.position.set(dx, y, dz); cl.userData.castOnly = true; g.add(cl); });
+                } else {        // เฟื่องฟ้า
+                    this.canopy(g, 0, h + 0.36, 0, 0.2, 0.17, 0.25, [0xd63384, 0x3f7d2c, 0xe75aa0, 0x4a8c3a], 9, rnd, 0, { cards: 9, detail: 2, cardScale: 1.25 });
                 }
                 return this.at(g, o.x, o.z);
             }
-            fx_dragonjar(o, rnd) {
+            fx_dragonjar(o) {
                 const g = new THREE.Group();
-                this.jarBody(g, o.r, 0x4a2410, rnd);
-                const gold = 0xc9a227;
-                [0.95, 1.35].forEach(k => { const b = this.mesh(new THREE.TorusGeometry(o.r * (k === 0.95 ? 0.99 : 0.93), 0.025, 6, 28), gold, { metalness: 0.6, roughness: 0.4 }); b.rotation.x = Math.PI / 2; b.position.y = o.r * k; g.add(b); });
-                for (let i = 0; i < 10; i++) {   // ลายมังกรนูน
-                    const a = (i / 10) * Math.PI * 2, s2 = this.mesh(new THREE.SphereGeometry(0.06, 6, 5), gold, { metalness: 0.6, roughness: 0.4 });
-                    s2.position.set(Math.cos(a) * o.r * 1.0, o.r * (1.1 + Math.sin(a * 2) * 0.12), Math.sin(a) * o.r * 1.0); s2.scale.set(1.6, 0.8, 1); g.add(s2);
-                }
+                this.jarBody(g, o.r, 0xffffff, this.lib('dragon'));
                 return this.at(g, o.x, o.z);
             }
             fx_bodhi(o, rnd) {
-                const g = new THREE.Group(), r = o.r;
-                const base = this.mesh(new THREE.CylinderGeometry(r, r * 1.05, 0.42, 30), 0xd8d2c4, { roughness: 0.9 }); base.position.y = 0.21; g.add(base);
-                const lip = this.mesh(new THREE.TorusGeometry(r, 0.06, 6, 30), 0xc4bdae); lip.rotation.x = Math.PI / 2; lip.position.y = 0.42; g.add(lip);
-                const soil = this.mesh(new THREE.CircleGeometry(r * 0.96, 24), 0x4a3520); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.41; g.add(soil);
-                const t = this.mesh(new THREE.CylinderGeometry(0.3, 0.45, 5.2, 12), 0x5a4632, { roughness: 1 }); t.position.y = 2.9; g.add(t);
-                [0xe53935, 0xfdd835, 0x43a047].forEach((col, i) => { const sash = this.mesh(new THREE.TorusGeometry(0.42 - i * 0.01, 0.045, 6, 20), col); sash.rotation.x = Math.PI / 2; sash.position.y = 1.15 + i * 0.1; g.add(sash); });
-                this.canopy(g, 0, 6.2, 0, 2.0, 1.2, 1.7, [0x3e7a2c, 0x4f8f35, 0x356b25], 11, rnd);
+                const g = new THREE.Group(), r = o.r, PL = this.lib('plaster');
+                const pm = new THREE.MeshStandardMaterial({ color: 0xe6e1d4, map: PL.map, normalMap: PL.normalMap, roughness: 0.9 });
+                const base = new THREE.Mesh(this.scaleUV(new THREE.CylinderGeometry(r, r * 1.05, 0.42, 36), 4, 0.4), pm); base.position.y = 0.21; g.add(base);
+                const lip = new THREE.Mesh(new THREE.TorusGeometry(r, 0.06, 8, 36), pm); lip.rotation.x = Math.PI / 2; lip.position.y = 0.42; g.add(lip);
+                const soil = this.mesh(new THREE.CircleGeometry(r * 0.96, 26), 0x4a3520, { roughness: 1 }); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.425; g.add(soil);
+                const t = this.trunk(g, 0.42, 5.3, 0x9a836a, { bend: [0.2, 0.1] }); t.position.y = 0.4;
+                [0xe53935, 0xfdd835, 0x43a047].forEach((col, i) => { const sash = this.mesh(new THREE.TorusGeometry(0.36 - i * 0.008, 0.045, 8, 22), col, { roughness: 0.7 }); sash.rotation.x = Math.PI / 2; sash.position.y = 1.5 + i * 0.1; g.add(sash); });
+                this.canopy(g, 0.2, 6.5, 0.1, 2.0, 1.2, 1.75, [0x3e7a2c, 0x4f8f35, 0x356b25], 11, rnd, 0, {});
                 return this.at(g, o.x, o.z);
             }
 
             // ---------- ลานหน้าโรงเรียน ----------
-            fx_walkway(o) {
-                const c = document.createElement('canvas'); c.width = c.height = 128;
+            fx_walkway(o, rnd) {
+                const c = document.createElement('canvas'); c.width = c.height = 256;
                 const x = c.getContext('2d');
-                x.fillStyle = '#d2cdc2'; x.fillRect(0, 0, 128, 128);
-                x.strokeStyle = 'rgba(95,90,82,0.55)'; x.lineWidth = 3; x.strokeRect(1, 1, 126, 126);
-                for (let i = 0; i < 400; i++) { x.fillStyle = `rgba(110,105,96,${(Math.random() * 0.2).toFixed(2)})`; x.fillRect(Math.random() * 128, Math.random() * 128, 2, 2); }
-                const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(1, o.hd * 2 / (o.hw * 2));
-                return this.conformRect(o.x, o.z, o.hw, o.hd, o.rot, 0.012, 0xffffff, { map: tex, roughness: 0.85 }, 2, Math.ceil(o.hd * 3));
+                x.fillStyle = '#d4cfc4'; x.fillRect(0, 0, 256, 256);
+                for (let i = 0; i < 3500; i++) { x.fillStyle = `rgba(${rnd() > 0.5 ? '100,95,86' : '245,242,236'},${(rnd() * 0.2).toFixed(2)})`; x.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 2, 1 + rnd() * 2); }
+                x.strokeStyle = 'rgba(70,66,60,0.7)'; x.lineWidth = 5; x.strokeRect(0, 0, 256, 256);
+                x.strokeStyle = 'rgba(255,255,255,0.25)'; x.lineWidth = 1.5; x.strokeRect(5, 5, 246, 246);
+                const tex = canvasTex(c); tex.repeat.set(1, o.hd * 2 / (o.hw * 2));
+                return this.conformRect(o.x, o.z, o.hw, o.hd, o.rot, 0.012, 0xffffff, { map: tex, roughness: 0.82 }, 3, Math.ceil(o.hd * 4));
             }
             fx_flagbase(o) {
-                const g = new THREE.Group(), w = o.hw * 2;
-                const t1 = this.mesh(new THREE.BoxGeometry(w, 0.28, w), 0xe8e4da, { roughness: 0.8 }); t1.position.y = 0.14; g.add(t1);
-                const t2 = this.mesh(new THREE.BoxGeometry(w * 0.68, 0.28, w * 0.68), 0xe8e4da, { roughness: 0.8 }); t2.position.y = 0.42; g.add(t2);
-                const t3 = this.mesh(new THREE.BoxGeometry(w * 0.3, 0.3, w * 0.3), 0xd0cabd); t3.position.y = 0.71; g.add(t3);
-                const pole = this.mesh(new THREE.CylinderGeometry(0.06, 0.09, 8, 12), 0xe0e0e0, { metalness: 0.6, roughness: 0.35 }); pole.position.y = 4.86; g.add(pole);
-                const knob = this.mesh(new THREE.SphereGeometry(0.14, 12, 8), 0xd8a628, { metalness: 0.7, roughness: 0.3 }); knob.position.y = 8.9; g.add(knob);
+                const g = new THREE.Group(), w = o.hw * 2, PL = this.lib('plaster');
+                const pm = (col) => new THREE.MeshStandardMaterial({ color: col, map: PL.map, normalMap: PL.normalMap, roughness: 0.85 });
+                const t1 = new THREE.Mesh(new THREE.BoxGeometry(w, 0.28, w), pm(0xece8de)); t1.position.y = 0.14; g.add(t1);
+                const t2 = new THREE.Mesh(new THREE.BoxGeometry(w * 0.68, 0.28, w * 0.68), pm(0xece8de)); t2.position.y = 0.42; g.add(t2);
+                const t3 = new THREE.Mesh(new THREE.BoxGeometry(w * 0.3, 0.3, w * 0.3), pm(0xd6d0c2)); t3.position.y = 0.71; g.add(t3);
+                const pole = this.mesh(new THREE.CylinderGeometry(0.055, 0.085, 8, 14), 0xe6e6e6, { metalness: 1, roughness: 0.32, envMapIntensity: 1.2 }); pole.position.y = 4.86; g.add(pole);
+                const knob = this.mesh(new THREE.SphereGeometry(0.14, 16, 12), 0xe2ad30, { metalness: 1, roughness: 0.25, envMapIntensity: 1.3 }); knob.position.y = 8.9; g.add(knob);
                 const flagGeo = new THREE.PlaneGeometry(2.0, 1.33, 20, 10);
-                const flag = new THREE.Mesh(flagGeo, new THREE.MeshLambertMaterial({ map: createThaiFlagTexture(), side: THREE.DoubleSide }));
+                const flag = new THREE.Mesh(flagGeo, new THREE.MeshStandardMaterial({ map: createThaiFlagTexture(), side: THREE.DoubleSide, roughness: 0.8 }));
                 flag.position.set(1.06, 8.1, 0); flag.userData.noShadow = true; g.add(flag);
                 const basePos = Float32Array.from(flagGeo.attributes.position.array);
                 this.animated.push((t) => {
@@ -1520,81 +2242,82 @@
                 return g;
             }
             fx_benchtree(o, rnd) {
-                const g = new THREE.Group(), r = o.r;
-                const wall = this.mesh(new THREE.CylinderGeometry(r, r, 0.45, 32, 1, true), 0xbdb7ab, { roughness: 0.85, side: THREE.DoubleSide }); wall.position.y = 0.225; g.add(wall);
-                const seat = this.mesh(new THREE.RingGeometry(r * 0.66, r + 0.04, 32), 0xd9d3c7, { roughness: 0.7, side: THREE.DoubleSide }); seat.rotation.x = -Math.PI / 2; seat.position.y = 0.45; g.add(seat);
-                const soil = this.mesh(new THREE.CircleGeometry(r * 0.66, 24), 0x4a3520); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.4; g.add(soil);
-                const t = this.mesh(new THREE.CylinderGeometry(0.3, 0.42, 4.4, 12), 0x5c4a32, { roughness: 1 }); t.position.y = 2.4; g.add(t);
-                this.canopy(g, 0, 5.2, 0, 2.2, 1.3, 1.8, [0x3f7f32, 0x4a8c3a, 0x356f2a], 10, rnd, 0.6);
+                const g = new THREE.Group(), r = o.r, PL = this.lib('plaster');
+                const pm = (col, rough) => new THREE.MeshStandardMaterial({ color: col, map: PL.map, normalMap: PL.normalMap, roughness: rough, side: THREE.DoubleSide });
+                const wall = new THREE.Mesh(this.scaleUV(new THREE.CylinderGeometry(r, r, 0.45, 40, 1, true), 4, 0.4), pm(0xc4beb2, 0.9)); wall.position.y = 0.225; g.add(wall);
+                const seat = new THREE.Mesh(new THREE.RingGeometry(r * 0.66, r + 0.05, 40), pm(0xddd7cb, 0.55)); seat.rotation.x = -Math.PI / 2; seat.position.y = 0.45; g.add(seat);
+                const inner = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.66, r * 0.66, 0.1, 30, 1, true), pm(0xc4beb2, 0.9)); inner.position.y = 0.41; g.add(inner);
+                const soil = this.mesh(new THREE.CircleGeometry(r * 0.66, 26), 0x4a3520, { roughness: 1 }); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.37; g.add(soil);
+                const t = this.trunk(g, 0.4, 4.5, 0x8d7860); t.position.y = 0.36;
+                this.canopy(g, 0, 5.4, 0, 2.2, 1.3, 1.85, [0x3f7f32, 0x4a8c3a, 0x356f2a], 10, rnd, 0.6, {});
                 return this.at(g, o.x, o.z);
             }
             fx_planter(o, rnd) {
-                const g = new THREE.Group();
-                const box = this.mesh(new THREE.BoxGeometry(o.hw * 2, 0.5, o.hd * 2), 0xb8b3a8, { roughness: 0.9 }); box.position.y = 0.25; g.add(box);
-                const soil = this.mesh(new THREE.PlaneGeometry(o.hw * 1.8, o.hd * 1.8), 0x3a2817); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.48; g.add(soil);
-                this.canopy(g, 0, 0.68, 0, o.hw * 0.55, 0.11, 0.16, [0x3f7d2c, 0xe53935, 0xfdd835, 0x3f7d2c], 10, rnd);
+                const g = new THREE.Group(), PL = this.lib('plaster');
+                const box = new THREE.Mesh(new THREE.BoxGeometry(o.hw * 2, 0.5, o.hd * 2), new THREE.MeshStandardMaterial({ color: 0xbfbaae, map: PL.map, normalMap: PL.normalMap, roughness: 0.9 })); box.position.y = 0.25; g.add(box);
+                const soil = this.mesh(new THREE.PlaneGeometry(o.hw * 1.8, o.hd * 1.8), 0x3a2817, { roughness: 1 }); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.505; g.add(soil);
+                this.canopy(g, 0, 0.7, 0, o.hw * 0.5, 0.12, 0.17, [0x3f7d2c, 0xe53935, 0xfdd835, 0x4a8c3a], 10, rnd, 0, { cards: 6, detail: 2, cardScale: 1.3 });
                 g.rotation.y = -o.rot;
                 return this.at(g, o.x, o.z);
             }
-            fx_bench(o) {
-                const g = new THREE.Group(), col = 0xc8c2b5;
-                [-1, 1].forEach(sx => { const leg = this.mesh(new THREE.BoxGeometry(0.16, 0.36, o.hd * 2), col, { roughness: 0.8 }); leg.position.set(sx * (o.hw - 0.12), 0.18, 0); g.add(leg); });
-                const top = this.mesh(new THREE.BoxGeometry(o.hw * 2 + 0.06, 0.09, o.hd * 2 + 0.06), 0xd8d2c6, { roughness: 0.5 }); top.position.y = 0.4; g.add(top);
+            fx_bench(o) {   // ม้านั่งหินขัด
+                const g = new THREE.Group(), PL = this.lib('plaster');
+                const leg = new THREE.MeshStandardMaterial({ color: 0xc8c2b5, map: PL.map, normalMap: PL.normalMap, roughness: 0.85 });
+                [-1, 1].forEach(sx => { const l = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.36, o.hd * 2), leg); l.position.set(sx * (o.hw - 0.12), 0.18, 0); g.add(l); });
+                const top = new THREE.Mesh(new THREE.BoxGeometry(o.hw * 2 + 0.06, 0.09, o.hd * 2 + 0.06), new THREE.MeshStandardMaterial({ color: 0xe0dace, map: PL.map, roughness: 0.3, envMapIntensity: 1.1 })); top.position.y = 0.405; g.add(top);
                 g.rotation.y = -o.rot;
                 return this.at(g, o.x, o.z);
             }
             fx_bin(o) {
                 const g = new THREE.Group();
-                const body = this.mesh(new THREE.CylinderGeometry(o.r, o.r * 0.88, 0.8, 18), 0x2e7d32, { roughness: 0.6 }); body.position.y = 0.4; g.add(body);
-                const lid = this.mesh(new THREE.CylinderGeometry(o.r * 1.05, o.r * 1.05, 0.07, 18), 0x1b5e20, { roughness: 0.6 }); lid.position.y = 0.83; g.add(lid);
-                const band = this.mesh(new THREE.CylinderGeometry(o.r * 0.97, o.r * 0.95, 0.12, 18, 1, true), 0xf2f2f2); band.position.y = 0.5; g.add(band);
+                const body = this.mesh(new THREE.CylinderGeometry(o.r, o.r * 0.86, 0.8, 22, 1, true), 0x2e8b3a, { roughness: 0.45, side: THREE.DoubleSide }); body.position.y = 0.4; g.add(body);
+                const bot = this.mesh(new THREE.CircleGeometry(o.r * 0.86, 20), 0x226b2c, { roughness: 0.6 }); bot.rotation.x = -Math.PI / 2; bot.position.y = 0.02; g.add(bot);
+                const lid = this.mesh(new THREE.CylinderGeometry(o.r * 1.06, o.r * 1.06, 0.07, 22), 0x1f6a2a, { roughness: 0.45 }); lid.position.y = 0.83; g.add(lid);
+                const knob = this.mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.06, 10), 0x1f6a2a, { roughness: 0.45 }); knob.position.y = 0.89; g.add(knob);
+                const band = this.mesh(new THREE.CylinderGeometry(o.r * 0.965, o.r * 0.94, 0.14, 22, 1, true), 0xf4f4f4, { roughness: 0.5 }); band.position.y = 0.52; g.add(band);
                 return this.at(g, o.x, o.z);
             }
 
             // ---------- ลานในป่าหญ้า ----------
             fx_tree(o, rnd) {
-                const g = new THREE.Group(), h = o.young ? 2.2 : 3.6;
-                this.trunk(g, o.r, h, 0x4a3825);
-                if (o.young) this.canopy(g, 0, h + 0.3, 0, 0.6, 0.45, 0.65, [0x5a9a3c, 0x4c8a3a], 5, rnd);
-                else this.canopy(g, 0, h + 0.9, 0, 1.4, 0.9, 1.3, [0x3f7a30, 0x4c8a3a, 0x2f6528], 8, rnd);
+                const g = new THREE.Group(), h = o.young ? 2.2 : 3.7;
+                this.trunk(g, o.r, h, o.young ? 0x9a8a6c : 0x86705a, { bend: [(rnd() - 0.5) * 0.4, (rnd() - 0.5) * 0.4] });
+                if (o.young) this.canopy(g, 0, h + 0.3, 0, 0.6, 0.45, 0.65, [0x5a9a3c, 0x4c8a3a], 5, rnd, 0, { cards: 22 });
+                else this.canopy(g, 0, h + 0.95, 0, 1.4, 0.9, 1.3, [0x3f7a30, 0x4c8a3a, 0x2f6528], 8, rnd, 0, {});
                 return this.at(g, o.x, o.z);
             }
             fx_bush(o, rnd) {
                 const g = new THREE.Group();
-                for (let i = 0; i < 7; i++) {
-                    const b = this.mesh(new THREE.SphereGeometry(o.r * (0.45 + rnd() * 0.25), 12, 9), i % 2 ? 0x3f7a30 : 0x4c8a3a, { roughness: 0.95 });
-                    const a = rnd() * Math.PI * 2, d = rnd() * o.r * 0.5;
-                    b.position.set(Math.cos(a) * d, o.r * (0.35 + rnd() * 0.3), Math.sin(a) * d); g.add(b);
-                }
-                for (let i = 0; i < 6; i++) { const f = this.mesh(new THREE.SphereGeometry(0.05, 6, 4), 0xfff3a0); const a = rnd() * 6.28; f.position.set(Math.cos(a) * o.r * 0.7, o.r * (0.5 + rnd() * 0.4), Math.sin(a) * o.r * 0.7); g.add(f); }
+                this.canopy(g, 0, o.r * 0.5, 0, o.r * 0.28, o.r * 0.45, o.r * 0.7, [0x3f7a30, 0x4c8a3a, 0x356b28], 7, rnd, 0.85, { cards: 14, detail: 2 });
+                const fm = new THREE.MeshStandardMaterial({ color: 0xfff3a0, roughness: 0.6 });
+                for (let i = 0; i < 9; i++) { const f = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), fm); const a = rnd() * 6.283; f.position.set(Math.cos(a) * o.r * 0.72, o.r * (0.45 + rnd() * 0.5), Math.sin(a) * o.r * 0.72); g.add(f); }
                 return this.at(g, o.x, o.z);
             }
             fx_fallenlog(o) {
                 const g = new THREE.Group();
-                g.add(this.logMesh(o.a, o.b, o.r, 0x4e3a26, 0xb89466));
-                const [ax, az] = o.a, [bx, bz] = o.b;   // มอสเกาะ
-                for (let i = 1; i < 4; i++) { const t = i / 4, x = ax + (bx - ax) * t, z = az + (bz - az) * t; const m = this.mesh(new THREE.SphereGeometry(o.r * 0.55, 8, 6), 0x5d8a35); m.scale.y = 0.4; m.position.set(x, this.gy(x, z) + o.r * 1.85, z); g.add(m); }
+                g.add(this.logMesh(o.a, o.b, o.r, 0x8a7460));
+                const [ax, az] = o.a, [bx, bz] = o.b, mm = new THREE.MeshStandardMaterial({ color: 0x6c9a3a, roughness: 1, vertexColors: true });
+                for (let i = 1; i < 5; i++) {   // มอสเกาะ
+                    const t = i / 5 + Math.sin(i * 5) * 0.05, x = ax + (bx - ax) * t, z = az + (bz - az) * t, m = new THREE.Mesh(this.blobGeo(i % 3, 1), mm);
+                    m.scale.set(o.r * 0.75, o.r * 0.22, o.r * 0.6); m.position.set(x, this.gy(x, z) + o.r * 1.92, z); m.rotation.y = i; g.add(m);
+                }
                 return g;
             }
             fx_tallgrass(o, rnd) {
-                const g = new THREE.Group();
-                g.add(this.conformDisc(o.x, o.z, o.r, 0.008, 0x3d5a22, { roughness: 1, transparent: true, opacity: 0.5, depthWrite: false }));
-                const N = 160, inst = new THREE.InstancedMesh(new THREE.ConeGeometry(0.03, 0.45, 3), new THREE.MeshStandardMaterial({ color: 0x6a9a35, roughness: 0.9 }), N), d = new THREE.Object3D();
+                const g = new THREE.Group(), N = 260, d = new THREE.Object3D();
+                const inst = new THREE.InstancedMesh(this.bladeGeo(), this.windMat(0x7fae48, 0.24), N);
                 for (let i = 0; i < N; i++) {
-                    const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * o.r, x = o.x + Math.cos(a) * rr, z = o.z + Math.sin(a) * rr;
-                    d.position.set(x, this.gy(x, z) + 0.2, z); d.rotation.set((rnd() - 0.5) * 0.5, rnd() * 3, (rnd() - 0.5) * 0.5); d.scale.setScalar(0.7 + rnd() * 0.7);
-                    d.updateMatrix(); inst.setMatrixAt(i, d.matrix);
+                    const a = rnd() * 6.283, rr = Math.sqrt(rnd()) * o.r, x = o.x + Math.cos(a) * rr, z = o.z + Math.sin(a) * rr, sc = 0.3 + rnd() * 0.3;
+                    d.position.set(x, this.gy(x, z), z); d.rotation.set(0, rnd() * 6.283, 0); d.scale.set(sc * 1.4, sc, sc * 1.4); d.updateMatrix(); inst.setMatrixAt(i, d.matrix);
                 }
-                inst.instanceMatrix.needsUpdate = true; g.add(inst);
+                inst.instanceMatrix.needsUpdate = true; inst.frustumCulled = false; inst.userData.noShadow = true; inst.receiveShadow = true; g.add(inst);
                 return g;
             }
-            fx_mud(o) { return this.conformDisc(o.x, o.z, o.r, 0.012, 0x3f2a16, { roughness: 0.3, metalness: 0.1 }); }
-            fx_boulder(o, rnd) {
+            fx_mud(o) { return this.wobblyDisc(o, 0.012, 0x4a3018, { roughness: 0.2, metalness: 0.1, envMapIntensity: 1.1 }); }
+            fx_boulder(o) {
                 const g = new THREE.Group();
-                const b = this.mesh(new THREE.DodecahedronGeometry(o.r * 1.1, 1), 0x6f7a62, { roughness: 1, flatShading: true });
-                b.scale.set(1, 0.72, 1.1); b.rotation.y = rnd() * 6; b.position.y = o.r * 0.4; g.add(b);
-                const moss = this.mesh(new THREE.SphereGeometry(o.r * 0.7, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), 0x5d8a35, { roughness: 1 });
-                moss.scale.y = 0.35; moss.position.y = o.r * 0.95; g.add(moss);
+                const b = new THREE.Mesh(this.rockGeo(0), new THREE.MeshStandardMaterial({ color: 0xa3a698, roughness: 1, vertexColors: true }));
+                b.scale.setScalar(o.r * 1.06); b.rotation.y = o.x; b.position.y = o.r * 0.32; g.add(b);
                 return this.at(g, o.x, o.z);
             }
 
@@ -1623,7 +2346,7 @@
                     this.dustTex = new THREE.CanvasTexture(c);
                 }
                 for (let i = 0; i < n; i++) {
-                    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dustTex, color: DUST_COLOR[this.themeKey], transparent: true, opacity: 0.55, depthWrite: false }));
+                    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dustTex, color: new THREE.Color(DUST_COLOR[this.themeKey]).convertSRGBToLinear(), transparent: true, opacity: 0.55, depthWrite: false }));
                     const a = Math.random() * Math.PI * 2;
                     sp.position.set(x, y, z);
                     sp.scale.setScalar(0.15);
@@ -1727,38 +2450,80 @@
                 this.refreshTag(p);
             }
 
+            // ไส้ลูกแก้วตาแมว: ครีบสีบิดเกลียว 3 แฉก
+            makeVanes(r, c1, c2) {
+                const pos = [], col = [], idx = [], SU = 20, SV = 5, LEN = r * 1.36, W = r * 0.55, twist = 1.35;
+                const A = new THREE.Color(c1).convertSRGBToLinear(), B = new THREE.Color(c2).convertSRGBToLinear();
+                for (let k = 0; k < 3; k++) {
+                    const base = pos.length / 3;
+                    for (let i = 0; i <= SU; i++) {
+                        const u = i / SU * 2 - 1, w = W * Math.pow(1 - u * u, 0.75), th = k * 2.0944 + twist * u;
+                        for (let j = 0; j <= SV; j++) {
+                            const v = j / SV, t = Math.pow(v, 0.7);
+                            pos.push(Math.cos(th) * v * w, u * LEN / 2, Math.sin(th) * v * w);
+                            col.push(B.r + (A.r - B.r) * t, B.g + (A.g - B.g) * t, B.b + (A.b - B.b) * t);
+                        }
+                    }
+                    for (let i = 0; i < SU; i++) for (let j = 0; j < SV; j++) { const a = base + i * (SV + 1) + j, b = a + 1, c = a + SV + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+                }
+                const g = new THREE.BufferGeometry();
+                g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+                g.setIndex(idx); g.computeVertexNormals();
+                return g;
+            }
+
             createMarble(pi, x, z) {
                 const st = PLAYER_STYLES[pi], r = CFG.MARBLE_R;
                 const group = new THREE.Group();
-                const glass = new THREE.MeshPhysicalMaterial({ color: 0xffffff, metalness: 0.05, roughness: 0.05, transmission: 0.88, transparent: true, ior: 1.5, clearcoat: 1.0 });
-                const outer = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 32), glass);
-                outer.castShadow = true; outer.receiveShadow = true; group.add(outer);
-                const inner = new THREE.Mesh(new THREE.TorusKnotGeometry(r * 0.42, 0.05, 24, 8),
-                    new THREE.MeshBasicMaterial({ map: createMarbleSwirlTexture(st.c1, st.c2), color: new THREE.Color(st.c1) }));
-                group.add(inner);
+                const sph = this.keepGeo('sphere', () => new THREE.SphereGeometry(1, 48, 32));
+                const C1 = new THREE.Color(st.c1).convertSRGBToLinear();
+                // ผิวแก้วด้านใน (ให้เห็นความหนาของเนื้อแก้ว)
+                const backMat = new THREE.MeshStandardMaterial({ color: 0x16302a, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.13, side: THREE.BackSide, depthWrite: false, envMapIntensity: 1.6 });
+                const back = new THREE.Mesh(sph, backMat); back.scale.setScalar(r * 0.985); back.renderOrder = 1; group.add(back);
+                // ไส้ตาแมว
+                const vaneMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.35, metalness: 0, envMapIntensity: 0.5 });
+                vaneMat.emissive.copy(C1).multiplyScalar(0.3); vaneMat.userData.lin = true;
+                const vanes = new THREE.Mesh(this.makeVanes(r, st.c1, st.c2), vaneMat);
+                vanes.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3); vanes.renderOrder = 2; group.add(vanes);
+                // เนื้อแก้วใส: สะท้อนท้องฟ้าและดวงอาทิตย์
+                const glass = new THREE.MeshPhysicalMaterial({ color: 0x0e1512, metalness: 0, roughness: 0.02, transmission: 0.96, transparent: true, clearcoat: 0.6, clearcoatRoughness: 0.03, envMapIntensity: 1.15, reflectivity: 0.62 });
+                const outer = new THREE.Mesh(sph, glass); outer.scale.setScalar(r); outer.renderOrder = 3; outer.castShadow = true; group.add(outer);
+                this.fixColors(group);
                 this.scene.add(group);
 
                 // วงแหวนทองเรืองแสง (แสดงเมื่อชุบตัวแล้ว)
                 const aura = new THREE.Mesh(new THREE.RingGeometry(r * 1.15, r * 1.55, 40),
-                    new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+                    new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
                 aura.rotation.x = -Math.PI / 2; aura.visible = false;
+                this.fixColors(aura);
                 this.scene.add(aura);
 
+                // เงาสัมผัสพื้น + แสงที่ลูกแก้วรวมไว้กลางเงา (caustic)
+                const dg = this.keepGeo('decal', () => { const q = new THREE.PlaneGeometry(1, 1); q.rotateX(-Math.PI / 2); return q; }), blob = this.lib('blob');
+                const dOpt = { map: blob, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 };
+                const contact = new THREE.Mesh(dg, new THREE.MeshBasicMaterial(Object.assign({ color: 0x000000, opacity: 0.45 }, dOpt)));
+                contact.scale.setScalar(r * 2.5);
+                const cMat = new THREE.MeshBasicMaterial(Object.assign({ opacity: 0.8, blending: THREE.AdditiveBlending }, dOpt));
+                cMat.color.copy(C1).lerp(new THREE.Color(1, 1, 1), 0.3); cMat.userData.lin = true; contact.material.userData.lin = true;
+                const caustic = new THREE.Mesh(dg, cMat); caustic.scale.setScalar(r * 0.85);
+                contact.visible = caustic.visible = false; contact.renderOrder = 4; caustic.renderOrder = 5;
+                this.scene.add(contact); this.scene.add(caustic);
+
                 const y = this.getTerrainHeight(x, z) + r;
-                const m = { player: pi, x, y, z, vx: 0, vz: 0, moving: false, r, mesh: group, aura, holed: false, eaten: false, removed: false, spawnT: 0, shield: true };
+                const m = { player: pi, x, y, z, vx: 0, vz: 0, moving: false, r, mesh: group, aura, contact, caustic, holed: false, eaten: false, removed: false, spawnT: 0, shield: true };
                 group.position.set(x, y, z); group.scale.setScalar(0.01);
                 this.marbles.push(m);
                 return m;
             }
 
             removeMarbleMesh(m) {
-                this.scene.remove(m.mesh); this.scene.remove(m.aura);
-                this.disposeObject(m.mesh); this.disposeObject(m.aura);
+                for (const o of [m.mesh, m.aura, m.contact, m.caustic]) { this.scene.remove(o); this.disposeObject(o); }
             }
 
             killMarble(m) {
                 m.removed = true; m.eaten = true;
-                m.aura.visible = false;
+                m.aura.visible = m.contact.visible = m.caustic.visible = false;
                 this.dying.push({ m, t: 0 });
                 const p = this.players[m.player];
                 if (p.marble === m) p.marble = null;
@@ -1775,13 +2540,15 @@
 
             refreshTag(p) {
                 if (!p.tag) {
-                    p.tag = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, transparent: true }));
+                    p.tag = new THREE.Sprite(new THREE.SpriteMaterial({ depthTest: false, transparent: true, toneMapped: false }));
+                    p.tag.material.userData.lin = true;
                     p.tag.scale.set(0.6, 0.17, 1); p.tag.renderOrder = 999;
                     this.scene.add(p.tag);
                 }
                 const mt = p.tag.material;
                 if (mt.map) mt.map.dispose();
                 mt.map = createTagTexture(p.name, p.color, p.blessed, this.isShielded(p));
+                mt.map.encoding = THREE.sRGBEncoding;
                 mt.needsUpdate = true;
             }
 
@@ -2061,6 +2828,11 @@
                 }
                 for (const m of this.marbles) {
                     if (m.removed) continue;
+                    if (m.holed) {   // ร่วงลงไปนอนก้นหลุม
+                        const H = this.hole, k = Math.min(1, dt * 14);
+                        m.x += (H.x - m.x) * k; m.z += (H.z - m.z) * k;
+                        m.y = Math.max(H.base - HOLE_VIS_DEPTH + m.r, m.y - dt * 3.4);
+                    }
                     m.mesh.position.set(m.x, m.y, m.z);
                     m.mesh.rotation.x += m.vz * dt * 3.2;
                     m.mesh.rotation.z -= m.vx * dt * 3.2;
@@ -2069,8 +2841,6 @@
 
             onHoled(m) {
                 m.holed = true; m.vx = m.vz = 0; m.moving = false;
-                m.x = this.hole.x; m.z = this.hole.z; m.y = this.hole.base - 0.22;
-                m.mesh.position.set(m.x, m.y, m.z);
                 audio.playHoleDrop();
                 // ตกหลุมนอกจังหวะดีด (เช่น ไหลเองหลังจบตา) = ไม่นับชุบตัว วางกลับที่ปากหลุม
                 if (this.state !== 'moving' && this.state !== 'resolving') { this.placeAtRim(m); return; }
@@ -2276,8 +3046,8 @@
 
             showArrow(P, dx, dz, ratio) {
                 const m = P.marble;
-                this.arrowShaftMat.color.set(P.color);
-                this.arrowHeadMat.color.set(P.color).offsetHSL(0, 0, 0.15);
+                this.arrowShaftMat.color.set(P.color).convertSRGBToLinear();
+                this.arrowHeadMat.color.set(P.color).offsetHSL(0, 0, 0.15).convertSRGBToLinear();
                 this.arrowGroup.position.set(m.x, m.y + 0.05, m.z);
                 this.arrowGroup.lookAt(m.x + dx, m.y + 0.05, m.z + dz);
                 const s = 0.5 + ratio * 1.5;
@@ -2596,6 +3366,16 @@
                     if (m.removed) return;
                     if (m.spawnT < 1) { m.spawnT = Math.min(1, m.spawnT + dt * 3.5); m.mesh.scale.setScalar(Math.max(0.01, m.spawnT)); }
                     const p = this.players[m.player];
+                    // เงาสัมผัส + แสงรวมใต้ลูกแก้ว (เอียงตามความลาดของพื้น)
+                    const onGround = !m.holed && m.spawnT > 0.6 && Math.hypot(m.x - this.hole.x, m.z - this.hole.z) > this.hole.r * 0.92;
+                    m.contact.visible = m.caustic.visible = onGround;
+                    if (onGround) {
+                        const e = 0.12, gx = (this.fastH(m.x + e, m.z) - this.fastH(m.x - e, m.z)) / (2 * e), gz = (this.fastH(m.x, m.z + e) - this.fastH(m.x, m.z - e)) / (2 * e);
+                        _vN.set(-gx, 1, -gz).normalize(); _qN.setFromUnitVectors(_vUp, _vN);
+                        m.contact.position.set(m.x, this.fastH(m.x, m.z) + 0.012, m.z); m.contact.quaternion.copy(_qN);
+                        const off = Math.min(m.r / this.sunTan, m.r * 2.3) * 0.8, cx = m.x - this.sunXZ.x * off, cz = m.z - this.sunXZ.y * off;
+                        m.caustic.position.set(cx, this.fastH(cx, cz) + 0.016, cz); m.caustic.quaternion.copy(_qN);
+                    }
                     const showAura = p && p.blessed && !m.holed && !m.eaten;
                     m.aura.visible = !!showAura;
                     if (showAura) {
@@ -2620,7 +3400,9 @@
                     if (p.tag.visible) p.tag.position.set(m.x, m.y + 0.5, m.z);
                 });
                 this.animated.forEach(fn => fn(this.time));
+                this.windU.value += dt; this.skyU.time.value += dt;
                 this.updateCamera(dt);
+                this.sky.position.copy(this.camera.position);
                 this.updateFades(dt);
                 if (this.paused && audio.ctx) audio.setRolling(0, 'dirt');
                 audio.ambienceTick(dt);
@@ -2632,11 +3414,35 @@
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
             }
 
+            // ปรับความละเอียดอัตโนมัติจากเฟรมเรตจริง (วัดทีละ 1 วินาที)
+            //  - หน่วง (<~38 fps): ลดความละเอียดลง และจำไว้ว่าระดับนั้นเครื่องรับไม่ไหว
+            //  - ลื่นต่อเนื่อง 2 วินาที (>~54 fps): เพิ่มความละเอียดขึ้นทีละขั้น จนถึงระดับคมเต็มจอ
+            autoQuality(raw) {
+                const d = this.dyn;
+                if (d.locked || document.hidden) return;
+                if (d.warm > 0) { d.warm -= raw; return; }
+                d.acc += raw; d.n++;
+                if (d.acc < 1.0) return;
+                const avg = d.acc / d.n, last = d.levels.length - 1, save = () => { try { localStorage.setItem('marble.dprIdx', d.idx); } catch (e) { } };
+                d.acc = 0; d.n = 0;
+                if (avg > 0.026 && d.idx < last) {
+                    d.idx = Math.min(last, d.idx + (avg > 0.045 ? 2 : 1)); d.best = d.idx; d.fast = 0;
+                    this.renderer.setPixelRatio(d.levels[d.idx]); d.warm = 0.5; save();
+                } else if (avg > 0.04 && d.idx === last && !d.lowShadow) {   // ยังหน่วงอยู่: ลดความละเอียดเงา
+                    d.lowShadow = true;
+                    this.sun.shadow.mapSize.set(1024, 1024);
+                    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+                } else if (avg < 0.0185 && d.idx > d.best) {
+                    if (++d.fast >= 2) { d.idx--; d.fast = 0; this.renderer.setPixelRatio(d.levels[d.idx]); d.warm = 0.5; save(); }
+                } else d.fast = 0;
+            }
+
             animate() {
                 requestAnimationFrame(() => this.animate());
-                const dt = Math.min(this.clock.getDelta(), 0.05);
+                const raw = this.clock.getDelta(), dt = Math.min(raw, 0.05);
                 this.tick(dt);
                 this.renderer.render(this.scene, this.camera);
+                this.autoQuality(Math.min(raw, 0.1));
             }
         }
 
