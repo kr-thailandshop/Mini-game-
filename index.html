@@ -216,6 +216,15 @@
             </div>
 
             <div class="sec">
+                <div class="sec-t">ระยะหลุม</div>
+                <div class="seg">
+                    <button class="opt" data-group="dist" data-val="near">ใกล้<small>ระยะเดิม</small></button>
+                    <button class="opt" data-group="dist" data-val="mid">กลาง<small>ไกลขึ้น 40%</small></button>
+                    <button class="opt" data-group="dist" data-val="far">ไกล<small>ไกลขึ้น 80%</small></button>
+                </div>
+            </div>
+
+            <div class="sec">
                 <div class="sec-t">บรรยากาศ</div>
                 <div class="grid2">
                     <button class="opt" data-group="theme" data-val="rural">🏡 ลานดินชนบท<small>ต้นมะม่วง โอ่งน้ำ ครกไม้ กองฟาง</small></button>
@@ -305,6 +314,8 @@
             { name: 'บอท 2', c1: '#00cc44', c2: '#ffff00', ui: '#34d36b' }
         ];
 
+        // ระยะหลุม: ถอยเส้นดีดออกไปจากหลุม (off = หน่วยที่ถอยเพิ่ม) — หลุมขนาดเท่าเดิม ยิ่งไกลยิ่งต้องกะแรงและเล็งแม่น
+        const DISTS = { near: { off: 0, name: 'ใกล้' }, mid: { off: 3, name: 'กลาง' }, far: { off: 6, name: 'ไกล' } };
         const STAGE_NAMES = { 1: 'พื้นเรียบ', 2: 'เนินคลื่น', 3: 'เนินสลับ', 4: 'หลุมแอ่งลึก' };
 
         const TILE = 4.2;              // ขนาดกระเบื้องลายพื้น (หน่วยโลก)
@@ -2018,7 +2029,7 @@
             }
             // พื้นที่ที่สัตว์อยู่ได้: ในลาน นอกเลนดีด ไม่ทับสิ่งกีดขวาง/แอ่งน้ำ และห่างหลุม
             free(x, z, r = 0.2) {
-                if (Math.abs(x) > 11.5 || z > 3.4 || z < -15.8) return false;
+                if (Math.abs(x) > 11.5 || z > this.G.lineZ + 1.4 || z < -15.8) return false;
                 if (Math.abs(x) < 1.9 && z > -7.8) return false;
                 if (Math.hypot(x - CFG.HOLE_X, z - CFG.HOLE_Z) < 2.3) return false;
                 for (const zn of this.G.zones || []) if ((zn.kind === 'puddle' || zn.kind === 'mud') && Math.hypot(x - zn.x, z - zn.z) < zn.r + r) return false;
@@ -2118,7 +2129,9 @@
                 this.stage = 1;
                 this.botCount = 1;
                 this.botLevel = 'normal';
-                this.pending = { stage: 1, bots: 1, level: 'normal' };
+                this.dist = 'near';
+                try { const sv = localStorage.getItem('marble.dist'); if (DISTS[sv]) this.dist = sv; } catch (e) { }
+                this.pending = { stage: 1, bots: 1, level: 'normal', dist: this.dist };
 
                 this.hole = { x: CFG.HOLE_X, z: CFG.HOLE_Z, r: CFG.HOLE_R, depth: CFG.HOLE_DEPTH, base: 0 };
                 this.players = [];
@@ -2188,6 +2201,8 @@
             }
 
             // ปากหลุมราบเสมอ: ไล่ความสูงเข้าหาระดับฐานหลุมแบบ smoothstep (ทรายไม่กลบหลุม)
+            get lineZ() { return CFG.LINE_Z + DISTS[this.dist || 'near'].off; }   // ตำแหน่งเส้นดีดตามระยะที่เลือก
+
             getTerrainHeight(x, z) {
                 if (this.stage === 1) return 0;
                 const b = this.baseHeight(x, z), hb = this.hole.base;
@@ -2312,7 +2327,7 @@
 
             // พื้นลาน: ตาข่ายละเอียดตรงลานเล่น (ช่องละ ~17 ซม.) แล้วค่อยๆ หยาบออกไปถึงขอบฟ้า
             createGround() {
-                const N = 220, half = N / 2, INNER = 11, LIN = 0.6, HALF = 90, CZ = -3;
+                const N = 220, half = N / 2, INNER = 12, LIN = 0.6, HALF = 90, CZ = -2;
                 const slope = INNER / LIN, cub = (HALF - INNER - slope * (1 - LIN)) / Math.pow(1 - LIN, 3);
                 const f = (t) => { const a = Math.abs(t), sg = t < 0 ? -1 : 1; if (a <= LIN) return sg * slope * a; const u = a - LIN; return sg * (INNER + slope * u + cub * u * u * u); };
                 const V = N + 1, pos = new Float32Array(V * V * 3), uv = new Float32Array(V * V * 2), col = new Float32Array(V * V * 3).fill(1), idx = [];
@@ -2363,7 +2378,7 @@
                     let v = 1;
                     if (Math.abs(x) < 36 && Math.abs(z + 3) < 36) {
                         v = 0.93 + 0.09 * Math.sin(x * 0.31 + 1.3) * Math.cos(z * 0.27 - 0.6) + 0.05 * Math.sin(x * 1.1 + z * 0.9) + 0.03 * Math.sin(x * 2.9 - z * 2.3);
-                        v *= 1 + 0.08 * Math.exp(-x * x / 5) * sm(-9, -6.5, z) * (1 - sm(2.2, 4, z));
+                        v *= 1 + 0.08 * Math.exp(-x * x / 5) * sm(-9, -6.5, z) * (1 - sm(this.lineZ + 0.2, this.lineZ + 2, z));
                         for (const o of this.colliders) {
                             if (Math.abs(x - o.cx) > o.br + 0.75 || Math.abs(z - o.cz) > o.br + 0.75) continue;
                             const [qx, qz, inside] = this.closestOn(o, x, z);
@@ -2433,7 +2448,7 @@
                 const N = 72, half = 3.4, w = 0.135, pos = [], uvs = [], idx = [], L = THEMES[this.themeKey].line;
                 for (let i = 0; i <= N; i++) {
                     const x = -half + (2 * half * i) / N;
-                    pos.push(x, this.getTerrainHeight(x, CFG.LINE_Z - w) + 0.012, CFG.LINE_Z - w, x, this.getTerrainHeight(x, CFG.LINE_Z + w) + 0.012, CFG.LINE_Z + w);
+                    pos.push(x, this.getTerrainHeight(x, this.lineZ - w) + 0.012, this.lineZ - w, x, this.getTerrainHeight(x, this.lineZ + w) + 0.012, this.lineZ + w);
                     uvs.push(i / N * 4, 0, i / N * 4, 1);
                     if (i < N) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
                 }
@@ -2811,7 +2826,9 @@
                 const trees = [];
                 for (let i = 0; i < 54; i++) {
                     const ang = rnd() * Math.PI * 2, rad = 13 + rnd() * 16, x = Math.cos(ang) * rad, z = Math.sin(ang) * rad - 4;
-                    trees.push({ x, z, y: this.gy(x, z), s: (0.9 + rnd() * 0.9) * 1.3, pine: rnd() < 0.55, rot: rnd() * 6.283, tint: 0.8 + rnd() * 0.4 });
+                    const t = { x, z, y: this.gy(x, z), s: (0.9 + rnd() * 0.9) * 1.3, pine: rnd() < 0.55, rot: rnd() * 6.283, tint: 0.8 + rnd() * 0.4 };
+                    if (Math.abs(x) < 6 && z > 5) continue;   // เว้นทางหลังเส้นดีด (ไม่ให้ต้นไม้บังกล้องเมื่อถอยเส้นไกล)
+                    trees.push(t);
                     this.aoSpots.push({ x, z, r: 0.2, f: 1.5, k: 0.35 });
                 }
                 const pines = trees.filter(t => t.pine), rounds = trees.filter(t => !t.pine);
@@ -3483,7 +3500,7 @@
 
             spawnAtLine(pi) {
                 let x = this.slotX(pi);
-                const z = CFG.LINE_Z;
+                const z = this.lineZ;
                 for (let k = 0; k < 8 && !this.isFree(x, z); k++) x += (k % 2 ? -1 : 1) * (k + 1) * 0.65;
                 const p = this.players[pi];
                 p.marble = this.createMarble(pi, x, z);
@@ -3623,6 +3640,9 @@
                 this.stage = this.pending.stage;
                 this.botCount = this.pending.bots;
                 this.botLevel = this.pending.level;
+                this.dist = DISTS[this.pending.dist] ? this.pending.dist : 'near';
+                try { localStorage.setItem('marble.dist', this.dist); } catch (e) { }
+                this.sun.target.position.z = -3.5 + DISTS[this.dist].off * 0.5;   // เลื่อนพื้นที่เงาให้คลุมถึงเส้นดีด
                 this.applyStage();
 
                 this.marbles.forEach(m => this.removeMarbleMesh(m));
@@ -4153,15 +4173,16 @@
                         else if (grp === 'stage') this.pending.stage = +val;
                         else if (grp === 'bots') this.pending.bots = +val;
                         else if (grp === 'level') this.pending.level = val;
+                        else if (grp === 'dist') this.pending.dist = val;
                         this.syncSettingsUI();
                     });
                 });
             }
 
             syncSettingsUI() {
-                const cur = { theme: this.themeKey, stage: String(this.pending.stage), bots: String(this.pending.bots), level: this.pending.level };
+                const cur = { theme: this.themeKey, stage: String(this.pending.stage), bots: String(this.pending.bots), level: this.pending.level, dist: this.pending.dist };
                 document.querySelectorAll('#settings-modal .opt').forEach(b => b.classList.toggle('sel', cur[b.dataset.group] === b.dataset.val));
-                const changed = this.pending.stage !== this.stage || this.pending.bots !== this.botCount || this.pending.level !== this.botLevel;
+                const changed = this.pending.stage !== this.stage || this.pending.bots !== this.botCount || this.pending.level !== this.botLevel || this.pending.dist !== this.dist;
                 const canResume = this.matchStarted && this.state !== 'over';
                 document.getElementById('resume-btn').style.display = canResume ? 'block' : 'none';
                 document.getElementById('start-btn').innerText = this.matchStarted ? (changed ? '▶ เริ่มเกมใหม่ด้วยค่านี้' : '🔄 เริ่มเกมใหม่') : '▶ เริ่มเกม';
@@ -4170,7 +4191,7 @@
             openSettings() {
                 this.cancelAiming();
                 this.paused = true;
-                this.pending = { stage: this.stage, bots: this.botCount, level: this.botLevel };
+                this.pending = { stage: this.stage, bots: this.botCount, level: this.botLevel, dist: this.dist };
                 this.syncSettingsUI();
                 document.getElementById('settings-modal').classList.add('show');
             }
@@ -4212,7 +4233,7 @@
                 if (!P) { pill.innerHTML = 'ตั้งค่าแล้วกดเริ่มเกม'; return; }
                 const who = P.isBot ? `${P.name} 🤖` : 'คุณ';
                 const phase = this.phase === 'toss' ? 'ขึ้นตาด' : (P.blessed ? 'เป็นเจ้า · ดีดกิน' : 'หาหลุมชุบตัว');
-                pill.innerHTML = `ตาของ <b>${who}</b> · ${phase} <span class="meta">· ด่าน ${this.stage} ${THEMES[this.themeKey].name}</span>`;
+                pill.innerHTML = `ตาของ <b>${who}</b> · ${phase} <span class="meta">· ด่าน ${this.stage} ${THEMES[this.themeKey].name}${this.dist !== 'near' ? ' · หลุม' + DISTS[this.dist].name : ''}</span>`;
             }
 
             setPower(ratio, label) {
@@ -4241,7 +4262,7 @@
                 const me = this.players[0];
                 const winner = ranked[0];
                 document.getElementById('over-title').textContent = !me.out && winner === me ? '🏆 คุณชนะ!' : (me.out ? '😢 ลูกแก้วคุณหมดแล้ว' : `🏆 ${winner.name} ชนะ`);
-                document.getElementById('over-sub').textContent = `ด่าน ${this.stage} ${STAGE_NAMES[this.stage]} · ${THEMES[this.themeKey].name} · บอท${BOT_LEVELS[this.botLevel].label}`;
+                document.getElementById('over-sub').textContent = `ด่าน ${this.stage} ${STAGE_NAMES[this.stage]} · ${THEMES[this.themeKey].name} · หลุม${DISTS[this.dist].name} · บอท${BOT_LEVELS[this.botLevel].label}`;
                 document.getElementById('over-list').innerHTML = ranked.map((p, i) =>
                     `<div class="stand"><b>${i + 1}</b><span class="dot" style="background:${p.color}"></span>${p.name}<span style="opacity:.7;font-size:11px">${p.out ? 'ตกรอบ' : 'เหลือ ' + p.lives + ' ลูก'}</span><span class="sc">${p.score}</span></div>`
                 ).join('');
@@ -4306,7 +4327,7 @@
                 const target = new THREE.Vector3(m.x - dir.x * back, m.y + 2.7 + Math.min(dist, 8) * 0.08, m.z - dir.y * back);
                 target.x = clamp(target.x, -22, 22); target.z = clamp(target.z, -22, 22);
                 target.y = Math.max(target.y, this.getTerrainHeight(target.x, target.z) + 1.2);
-                const lookDist = Math.min(dist * 0.5, 3.0);
+                const lookDist = Math.min(dist * 0.5, 3.0 + clamp((dist - 9) * 0.35, 0, 2));   // ระยะไกล: มองไปข้างหน้ามากขึ้น ให้เห็นหลุมชัด
                 const look = new THREE.Vector3(m.x + dir.x * lookDist, m.y + 0.25, m.z + dir.y * lookDist);
                 this.camera.position.lerp(target, k);
                 if (!this.camLook) this.camLook = look.clone(); else this.camLook.lerp(look, k);
